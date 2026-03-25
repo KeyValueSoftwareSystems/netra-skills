@@ -1,6 +1,6 @@
 ---
 name: netra-best-practices
-description: 'Code-first Netra best-practices playbook covering setup, instrumentation, context tracking, custom spans/metrics, integration patterns, MCP trace analysis, evaluation, simulation, and troubleshooting.'
+description: 'Code-first Netra best-practices playbook covering setup, instrumentation, context tracking, custom spans/metrics, integration patterns, evaluation, simulation, and troubleshooting.'
 argument-hint: 'Describe your language/framework, provider stack, use case, target quality criteria, and what issue or outcome you are working on.'
 ---
 
@@ -26,7 +26,6 @@ This unified skill combines guidance for:
 - Custom spans, usage/cost, and action records.
 - OpenTelemetry custom metrics.
 - Integration patterns (FastAPI, Express, multi-agent, batch, streaming).
-- MCP trace analysis workflow (`netra_query_traces`, `netra_get_trace_by_id`).
 - Evaluation setup and regression tracking.
 - Multi-turn simulation setup and analysis.
 - Troubleshooting and production triage.
@@ -44,8 +43,7 @@ This unified skill combines guidance for:
 7. Validate trace hierarchy and metadata in Observability.
 8. Build eval datasets and run test suites before releases.
 9. Build multi-turn simulations for critical scenarios/personas.
-10. Use MCP trace tools to debug failures and latency regressions.
-11. Apply troubleshooting triage for missing telemetry or SDK errors.
+10. Apply troubleshooting triage for missing telemetry or SDK errors.
 
 ## Tracing Method Decision Guide
 - Auto-instrumentation: choose when you need quickest provider/framework visibility.
@@ -173,17 +171,6 @@ active = meter.create_up_down_counter("llm.active_requests", unit="1")
 - Batch: create per-item spans and capture failure metadata.
 - Streaming: ensure spans close only after stream completion.
 
-## MCP Debugging Workflow
-1. Query traces with a narrow time range and specific filters.
-2. Select the most relevant trace.
-3. Fetch full span tree by trace ID.
-4. Inspect parent-child relationships, errors, and slow spans.
-5. Summarize root cause and next fix.
-
-Primary tools:
-- `netra_query_traces`
-- `netra_get_trace_by_id`
-
 ## Evaluation Code Sample (Python)
 ```python
 from netra import Netra
@@ -283,7 +270,6 @@ console.log(result?.completed.length, result?.failed.length);
 - No sensitive payloads are exported unintentionally.
 - Metrics dimensions are bounded and low cardinality.
 - Evaluations and simulations run before release promotion.
-- MCP trace review is part of incident/debug workflow.
 
 ## References
 - https://docs.getnetra.ai/quick-start/QuickStart_Tracing
