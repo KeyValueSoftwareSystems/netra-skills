@@ -65,6 +65,38 @@ Example item shape:
 }
 ```
 
+## TypeScript Simulation Run Pattern
+```typescript
+import { Netra } from "netra-sdk-js";
+import { BaseTask, TaskResult } from "netra-sdk-js/simulation";
+
+const client = new Netra({ apiKey: process.env.NETRA_API_KEY! });
+
+class MyAgentTask extends BaseTask {
+   constructor(private readonly agent: any) {
+      super();
+   }
+
+   async run(message: string, sessionId?: string | null): Promise<TaskResult> {
+      const response = await this.agent.chat(message, { sessionId });
+      return {
+         message: response.text,
+         sessionId: sessionId || "default",
+      };
+   }
+}
+
+const result = await client.simulation.runSimulation({
+   name: "Customer Support Simulation",
+   datasetId: "dataset-123",
+   task: new MyAgentTask(myAgent),
+   context: { environment: "staging" },
+   maxConcurrency: 5,
+});
+
+console.log(result?.completed.length, result?.failed.length);
+```
+
 ## Results Analysis Loop
 1. Identify failing scenarios and failed evaluators.
 2. Inspect conversation turn where behavior diverges.
@@ -84,3 +116,4 @@ Example item shape:
 - https://docs.getnetra.ai/Simulation/Datasets
 - https://docs.getnetra.ai/Simulation/Evaluators
 - https://docs.getnetra.ai/Simulation/TestRuns
+- https://docs.getnetra.ai/sdk-reference/simulation/typescript

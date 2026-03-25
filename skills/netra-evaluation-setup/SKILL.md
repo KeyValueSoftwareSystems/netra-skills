@@ -61,6 +61,36 @@ result = Netra.evaluation.run_test_suite(
 print(result)
 ```
 
+## TypeScript Evaluation Run Pattern
+```typescript
+import { Netra } from "netra-sdk-js";
+import OpenAI from "openai";
+
+const client = new Netra({ apiKey: process.env.NETRA_API_KEY! });
+const openai = new OpenAI();
+
+async function taskFn(inputData: any): Promise<string> {
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [{ role: "user", content: String(inputData) }],
+  });
+  return response.choices[0].message.content || "";
+}
+
+const dataset = await client.evaluation.getDataset("dataset-123");
+
+if (dataset) {
+  const result = await client.evaluation.runTestSuite(
+    "baseline-eval",
+    dataset,
+    taskFn,
+    ["correctness", "relevance"],
+    10
+  );
+  console.log(result?.runId);
+}
+```
+
 ## Quality Checklist
 - Dataset includes realistic production examples.
 - Dataset includes edge cases and refusal scenarios.
@@ -81,3 +111,4 @@ print(result)
 - https://docs.getnetra.ai/Evaluation/Datasets
 - https://docs.getnetra.ai/Evaluation/Evaluators
 - https://docs.getnetra.ai/Evaluation/TestRuns
+- https://docs.getnetra.ai/sdk-reference/evaluation/typescript
