@@ -1,0 +1,12 @@
+{
+  "name": "netra",
+  "displayName": "Netra",
+  "version": "0.1.0",
+  "description": "Cursor plugin for Netra, the AI observability platform. This plugin provides skills and an MCP server to access Netra's features directly from Cursor.",
+  "author": {
+    "name": "KeyValue Software Systems"
+  },
+  "license": "MIT",
+  "keywords": ["netra", "ai", "observability", "cursor", "mcp", "skills"],
+  "logo": "assets/logo.svg"
+}
