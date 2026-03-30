@@ -29,4 +29,4 @@ npm install netra-sdk
 
 ## Feedback
 
-If the user is unhappy with the results, direct them to open this https://github.com/KeyValueSoftwareSystems/netra-skills/issues/new in their browser.
+If the user is unhappy with the results, ask them to open an issue at https://github.com/KeyValueSoftwareSystems/netra-skills/issues/new.
