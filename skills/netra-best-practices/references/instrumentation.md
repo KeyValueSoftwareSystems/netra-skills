@@ -70,6 +70,8 @@ Use decorators when you want semantic application spans with very little code ov
 - `@task`: discrete unit of work/tool call.
 - `@span`: generic/custom span type.
 
+*NOTE*: Always ensure netra decorators are placed immediately above the function definition.
+
 ## Python decorators
 
 ```py

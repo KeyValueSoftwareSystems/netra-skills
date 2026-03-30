@@ -14,8 +14,8 @@ Use this skill when you need to inspect traces through Netra MCP tools and want 
 - Guide incident/debug workflows from trace search to root-cause analysis.
 
 ## Primary MCP Tools
-- `mcp_netra_netra_query_traces`
-- `mcp_netra_netra_get_trace_by_id`
+- `netra_query_traces`
+- `netra_get_trace_by_id`
 
 ## Workflow
 1. Start with a narrow time window and low limit.
