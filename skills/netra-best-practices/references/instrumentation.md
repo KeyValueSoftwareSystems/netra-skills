@@ -106,6 +106,11 @@ class OrderAgent:
     def orchestrate(self, order: dict):
         self.validate(order)
         return self.dispatch(order)
+
+@tool #Langchain tools if the app uses langchain
+@task(name="Tool Call")
+def tool_call():
+	return "Tool output"
 ```
 
 ## TypeScript decorators
@@ -140,6 +145,11 @@ class OrderAgent {
 		await this.validate(order);
 		return this.dispatch(order);
 	}
+}
+
+@task({ name: "Tool Call" })
+async function toolCall() {
+	return "Tool output";
 }
 ```
 
@@ -241,8 +251,7 @@ async function chatWithAI(userMessage: string): Promise<string> {
 2. Initialization happens before instrumented library usage.
 3. High-level operations appear as workflow spans.
 4. TypeScript manual spans always call `span.end()`.
-5. Sensitive content capture is disabled where required (`trace_content=False` / `traceContent: false`).
-6. `shutdown()` is called on graceful app termination.
+5. `shutdown()` is called on graceful app termination.
 
 ## References
 
