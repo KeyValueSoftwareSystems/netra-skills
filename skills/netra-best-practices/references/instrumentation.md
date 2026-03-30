@@ -8,7 +8,7 @@ description: Instrument LLM applications with Netra. Use when setting up Netra i
 Instrument LLM applications/AI agents with Netra, following best practices and tailored to your use case.
 
 ## Workflow
-- Assess the current environment - Ensure netra-sdk is installed and figure out which libraries are installed for the LLM application.
+- Assess the current environment - Ensure netra-sdk is installed and is the latest version, and figure out which libraries are installed for the LLM application.
 - Determine the kind of instrumentation necessary for the application.
 - Instrument the application and instruct the user on steps they need to take to set up their environment.
 
