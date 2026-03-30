@@ -25,7 +25,7 @@ npm install netra-sdk
 
 ## Use-Case specific references
 
-- [Netra Observability](./references/instrumentation.md)
+- Instrumenting an LLM application: references/instrumentation.md
 
 ## Feedback
 
