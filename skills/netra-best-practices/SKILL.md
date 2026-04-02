@@ -6,7 +6,7 @@ argument-hint: 'Describe your language/framework, provider stack, use case, targ
 
 # Netra Best Practices
 
-Use this skill as the default end-to-end guide for integrating, operating, and improving AI systems with Netra.
+Use this skill as the default end-to-end guide for integrating, operating, and improving AI systems with Netra. Also you can create custom metrics using this skill.
 
 ## Installation
 
@@ -26,6 +26,7 @@ npm install netra-sdk
 ## Use-Case specific references
 
 - Instrumenting an LLM application: references/instrumentation.md
+- custom metrics for the agent (counters, histograms, gauges): references/custom-metrics.md
 
 ## Feedback
 
