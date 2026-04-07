@@ -27,6 +27,8 @@ npm install netra-sdk
 
 - Instrumenting an LLM application: references/instrumentation.md
 - custom metrics for the agent (counters, histograms, gauges): references/custom-metrics.md
+- Setting up single-turn evaluations: references/single-turn-eval.md
+- Setting up multi-turn simulations: references/multi-turn-simulations.md
 
 ## Feedback
 
