@@ -10,18 +10,17 @@ Use this skill as the default end-to-end guide for integrating, operating, and i
 
 ## Installation
 
-Install the Netra SDK for your stack:
+You MUST detect the project's package manager before installing `netra-sdk`. Check the project root for these files in priority order and use the **first match**:
 
-```bash
-# Python (pip)
-pip install netra-sdk
+1. `uv.lock` → install with **uv**
+2. `poetry.lock` → install with **poetry**
+3. `pyproject.toml` (without uv.lock or poetry.lock) → install with **pip**
+4. `requirements.txt` (no other Python indicators above) → install with **pip**
+5. `yarn.lock` → install with **yarn**
+6. `package-lock.json` → install with **npm**
+7. None found → **ask the user** which package manager they use before proceeding
 
-# Python (uv)
-uv add netra-sdk
-
-# TypeScript / JavaScript (npm)
-npm install netra-sdk
-```
+You MUST NOT run multiple install commands, guess when signals conflict, or install globally. The package name is `netra-sdk` for all managers.
 
 ## Use-Case specific references
 
