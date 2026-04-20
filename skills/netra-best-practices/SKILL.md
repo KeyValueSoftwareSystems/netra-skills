@@ -10,17 +10,19 @@ Use this skill as the default end-to-end guide for integrating, operating, and i
 
 ## Installation
 
-You MUST detect the project's package manager before installing `netra-sdk`. Check the project root for these files in priority order and use the **first match**:
+Detect the project's package manager before installing `netra-sdk`. Check the project root in priority order:
 
-1. `uv.lock` → install with **uv**
-2. `poetry.lock` → install with **poetry**
-3. `pyproject.toml` (without uv.lock or poetry.lock) → install with **pip**
-4. `requirements.txt` (no other Python indicators above) → install with **pip**
-5. `yarn.lock` → install with **yarn**
-6. `package-lock.json` → install with **npm**
-7. None found → **ask the user** which package manager they use before proceeding
+| Priority | Signal file | Command |
+|----------|-------------|---------|
+| 1 | `uv.lock` | `uv add netra-sdk` |
+| 2 | `poetry.lock` | `poetry add netra-sdk` |
+| 3 | `pyproject.toml` (no lock file above) | `pip install netra-sdk` |
+| 4 | `requirements.txt` (no Python indicators above) | `pip install netra-sdk` |
+| 5 | `yarn.lock` | `yarn add netra-sdk` |
+| 6 | `package-lock.json` | `npm install netra-sdk` |
+| 7 | None found | **Ask the user** before proceeding |
 
-You MUST NOT run multiple install commands, guess when signals conflict, or install globally. The package name is `netra-sdk` for all managers.
+Do NOT run multiple install commands or install globally.
 
 ## Use-Case specific references
 
