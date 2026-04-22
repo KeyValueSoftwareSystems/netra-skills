@@ -28,6 +28,7 @@ Do NOT run multiple install commands or install globally.
 
 - Instrumenting an LLM application: references/instrumentation.md
 - custom metrics for the agent (counters, histograms, gauges): references/custom-metrics.md
+- Single-turn evaluations (datasets, test suites, custom evaluators): references/single-turn-evaluations.md
 
 ## Feedback
 
