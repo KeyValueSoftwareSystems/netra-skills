@@ -1,18 +1,19 @@
 ---
-name: netra-setup
-description: Instrument LLM applications with Netra. Use when setting up Netra in a new project, adding observability or auditing existing instrumentation.
+name: netra-python-instrumentation
+description: Instrument Python LLM applications with Netra. Use when setting up Netra in a new project, adding observability or auditing existing instrumentation.
 ---
 
-# Netra Observability
+# Netra Python Instrumentation
 
-Instrument LLM applications/AI agents with Netra, following best practices and tailored to your use case.
+Instrument Python LLM applications with Netra, following best practices tailored to the Python SDK.
 
 ## Workflow
-- Assess the current environment - Ensure netra-sdk is installed and is the latest version, and figure out which libraries are installed for the LLM application.
+
+- Assess the current environment - Ensure `netra-sdk` is installed and is the latest version.
 - Determine the kind of instrumentation necessary for the application.
 - Instrument the application and instruct the user on steps they need to take to set up their environment.
 
-## Auto Instrumentation
+## Auto-Instrumentation
 
 Auto-instrumentation is the fastest way to start. Netra patches supported libraries and automatically captures spans for LLM calls, frameworks, vector DBs, HTTP, and more.
 
@@ -23,9 +24,9 @@ NETRA_API_KEY=
 NETRA_OTLP_ENDPOINT=
 ```
 
-The user may create their api key by visiting the dashboard and going to Settings -> Project -> API Keys.
+The user may create their API key by visiting the dashboard: Settings → Project → API Keys.
 
-```py
+```python
 import os
 from netra import Netra
 from netra.instrumentation.instruments import InstrumentSet
@@ -44,37 +45,48 @@ Netra.set_user_id("user-123")
 Netra.set_session_id("session-abc")
 ```
 
-```typescript
-import { Netra, NetraInstruments } from "netra-sdk";
+Valid instrument names are listed in the official Netra documentation listed in the **References** section. Always verify an instrument exists before using it.
 
-// Always await init in TypeScript so instrumentations are ready
-await Netra.init({
-	appName: "my-ai-app",
-	environment: "production",
-	headers: `x-api-key=${process.env.NETRA_API_KEY}`,
-	traceContent: true,
-	instruments: new Set([NetraInstruments.OPENAI, NetraInstruments.LANGCHAIN]),
-});
+### Blocking instruments
 
-// Optional context for trace grouping
-Netra.setUserId("user-123");
-Netra.setSessionId("session-abc");
+Use `block_instruments` to exclude specific instrumentations while keeping defaults:
+
+```python
+Netra.init(
+    app_name="my-ai-app",
+    block_instruments={
+        InstrumentSet.HTTPX,
+        InstrumentSet.REQUESTS,
+    },
+)
 ```
 
-# Instrumentation through decorators
+### Controlling root spans
 
-Use decorators when you want semantic application spans with very little code overhead.
+Use `root_instruments` to limit which libraries can create root-level spans:
+
+```python
+Netra.init(
+    app_name="my-ai-app",
+    root_instruments={
+        InstrumentSet.OPENAI,
+        InstrumentSet.ANTHROPIC,
+    },
+)
+```
+
+## Instrumentation through decorators
+
+Use decorators for semantic application spans with minimal code overhead.
 
 - `@workflow`: top-level business process.
 - `@agent`: agent/orchestrator behavior.
-- `@task`: discrete unit of work/tool call.
+- `@task`: discrete unit of work / tool call.
 - `@span`: generic/custom span type.
 
 *NOTE*: Always ensure netra decorators are placed immediately above the function definition.
 
-## Python decorators
-
-```py
+```python
 from netra import Netra, SpanType
 from netra.decorators import workflow, agent, task, span
 
@@ -113,56 +125,15 @@ def tool_call():
 	return "Tool output"
 ```
 
-## TypeScript decorators
-
-TypeScript decorators require `"experimentalDecorators": true` in `tsconfig.json`.
-
-```typescript
-import { SpanType } from "netra-sdk";
-import { workflow, agent, task, span } from "netra-sdk/decorators";
-
-@workflow({ name: "order-fulfillment" })
-async function fulfillOrder(order: { id: string; items: unknown[] }) {
-	const result = await new OrderAgent().orchestrate(order);
-	return result;
-}
-
-@agent({ name: "order-agent" })
-class OrderAgent {
-	@task({ name: "validate-order" })
-	async validate(order: { items: unknown[] }) {
-		if (!order.items?.length) {
-			throw new Error("Order must contain at least one item");
-		}
-	}
-
-	@span({ name: "shipping-quote", asType: SpanType.TOOL })
-	async dispatch(order: { id: string }) {
-		return { status: "queued", orderId: order.id };
-	}
-
-	async orchestrate(order: { id: string; items: unknown[] }) {
-		await this.validate(order);
-		return this.dispatch(order);
-	}
-}
-
-@task({ name: "Tool Call" })
-async function toolCall() {
-	return "Tool output";
-}
-```
-
 Decorators automatically capture parameters and exceptions. Keep instrumentation focused on high-value workflow boundaries to avoid noisy traces.
 
-
-# Manual Instrumentation
+## Manual Instrumentation
 
 Use manual tracing when you need full lifecycle and metadata control, advanced nesting, or custom span boundaries.
 
-## Python manual tracing
+Python uses context managers — the span is automatically ended when the `with` block exits.
 
-```py
+```python
 from netra import Netra, SpanType, UsageModel
 
 def chat_with_ai(user_message: str) -> str:
@@ -195,63 +166,30 @@ def chat_with_ai(user_message: str) -> str:
             raise
 ```
 
-## TypeScript manual tracing
+## Context Tracking
 
-In TypeScript, always call `end()` (preferably in `finally`).
+Set context for trace grouping and filtering:
 
-```typescript
-import { Netra, SpanType } from "netra-sdk";
-
-async function chatWithAI(userMessage: string): Promise<string> {
-	const span = Netra.startSpan(
-		"chat-completion",
-		{
-			asType: SpanType.GENERATION,
-			moduleName: "chat",
-			attributes: { entrypoint: "chatWithAI" },
-		}
-	);
-
-	span.setPrompt(userMessage);
-	span.setModel("gpt-4");
-	span.setLlmSystem("openai");
-	span.addEvent("generation.started");
-
-	try {
-		const responseText = "Hello from model";
-
-		span.setUsage([
-			{
-				model: "gpt-4",
-				costInUsd: 0.001,
-				usageType: "chat",
-				unitsUsed: 1,
-			},
-		]);
-		span.setSuccess();
-		return responseText;
-	} catch (error: any) {
-		span.setError(error?.message || "unknown error");
-		throw error;
-	} finally {
-		span.end();
-	}
-}
+```python
+Netra.set_user_id("user-123")
+Netra.set_session_id("session-abc")
+Netra.set_tenant_id("tenant-xyz")
+Netra.set_custom_attributes("feature", "chat-v2")
 ```
 
-## Recommended rollout strategy
+## Recommended Rollout Strategy
 
 1. Start with auto-instrumentation for broad, immediate coverage.
-2. Add decorators for business semantics (`workflow -> agent -> task`).
+2. Add decorators for business semantics (`@workflow` → `@agent` → `@task`).
 3. Use manual spans only for operations requiring precise boundaries or custom metadata.
 
-## Validation checklist
+## Validation Checklist
 
-1. `Netra.init()` / `await Netra.init()` is called once at startup.
-2. Initialization happens before instrumented library usage.
+1. `Netra.init()` is called once at startup.
+2. Initialization happens **before** instrumented library usage.
 3. High-level operations appear as workflow spans.
-4. TypeScript manual spans always call `span.end()`.
-5. `shutdown()` is called on graceful app termination.
+4. `Netra.shutdown()` is called on graceful app termination.
+5. All `InstrumentSet` values and `SpanType` values used are verified against the official Netra documentation listed in the **References** section below.
 
 ## References
 
@@ -260,4 +198,3 @@ async function chatWithAI(userMessage: string): Promise<string> {
 - https://docs.getnetra.ai/Observability/Traces/manual-tracing
 - https://docs.getnetra.ai/Observability/Traces/configuration/initialization
 - https://docs.getnetra.ai/sdk-reference/sdk/python
-- https://docs.getnetra.ai/sdk-reference/sdk/typescript
