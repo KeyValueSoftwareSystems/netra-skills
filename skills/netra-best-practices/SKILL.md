@@ -1,7 +1,7 @@
 ---
 name: netra-best-practices
-description: 'Code-first Netra best-practices playbook covering setup, instrumentation, context tracking, custom spans/metrics, integration patterns, evaluation, simulation, and troubleshooting.'
-argument-hint: 'Describe your language/framework, provider stack, use case, target quality criteria, and what issue or outcome you are working on.'
+description: "Code-first Netra best-practices playbook covering setup, instrumentation, context tracking, custom spans/metrics, integration patterns, evaluation, simulation, and troubleshooting."
+argument-hint: "Describe your language/framework, provider stack, use case, target quality criteria, and what issue or outcome you are working on."
 ---
 
 # Netra Best Practices
@@ -12,10 +12,10 @@ Use this skill as the end-to-end guide for integrating, operating, and improving
 
 Before doing anything else, determine whether the project is **Python** or **TypeScript/JavaScript**. Check the project root in this order:
 
-| Signal file | Language |
-|---|---|
-| `pyproject.toml`, `setup.py`, `requirements.txt`, `Pipfile` | Python |
-| `package.json`, `tsconfig.json`, `bun.lockb` | TypeScript / JavaScript |
+| Signal file                                                 | Language                |
+| ----------------------------------------------------------- | ----------------------- |
+| `pyproject.toml`, `setup.py`, `requirements.txt`, `Pipfile` | Python                  |
+| `package.json`, `tsconfig.json`, `bun.lockb`                | TypeScript / JavaScript |
 
 If both are present (monorepo), ask the user which sub-project they are working on. If neither is found, ask the user.
 
@@ -25,17 +25,17 @@ If both are present (monorepo), ask the user which sub-project they are working 
 
 Detect the package manager before installing `netra-sdk`. Check in priority order:
 
-| Priority | Signal file | Command |
-|---|---|---|
-| 1 | `uv.lock` | `uv add netra-sdk` |
-| 2 | `poetry.lock` | `poetry add netra-sdk` |
-| 3 | `pyproject.toml` (no lock file above) | `pip install netra-sdk` |
-| 4 | `requirements.txt` (no Python indicators above) | `pip install netra-sdk` |
-| 5 | `yarn.lock` | `yarn add netra-sdk` |
-| 6 | `pnpm-lock.yaml` | `pnpm add netra-sdk` |
-| 7 | `package-lock.json` | `npm install netra-sdk` |
-| 8 | `bun.lockb` | `bun add netra-sdk` |
-| 9 | None found | **Ask the user** before proceeding |
+| Priority | Signal file                                     | Command                            |
+| -------- | ----------------------------------------------- | ---------------------------------- |
+| 1        | `uv.lock`                                       | `uv add netra-sdk`                 |
+| 2        | `poetry.lock`                                   | `poetry add netra-sdk`             |
+| 3        | `pyproject.toml` (no lock file above)           | `pip install netra-sdk`            |
+| 4        | `requirements.txt` (no Python indicators above) | `pip install netra-sdk`            |
+| 5        | `yarn.lock`                                     | `yarn add netra-sdk`               |
+| 6        | `pnpm-lock.yaml`                                | `pnpm add netra-sdk`               |
+| 7        | `package-lock.json`                             | `npm install netra-sdk`            |
+| 8        | `bun.lockb`                                     | `bun add netra-sdk`                |
+| 9        | None found                                      | **Ask the user** before proceeding |
 
 Do NOT run multiple install commands or install globally.
 
@@ -45,21 +45,21 @@ Based on the detected language and the user's use case, read the appropriate ref
 
 ### Python references (under `references/python/`)
 
-| Use case | Reference file |
-|---|---|
-| Instrumenting an LLM application | `python/instrumentation.md` |
-| Running evaluations / test suites | `python/evaluation.md` |
-| Running multi-turn simulations | `python/simulation.md` |
-| Custom metrics (counters, histograms, gauges) | `python/custom-metrics.md` |
+| Use case                                      | Reference file              |
+| --------------------------------------------- | --------------------------- |
+| Instrumenting an LLM application              | `python/instrumentation.md` |
+| Running evaluations / test suites             | `python/evaluation.md`      |
+| Running multi-turn simulations                | `python/simulation.md`      |
+| Custom metrics (counters, histograms, gauges) | `python/custom-metrics.md`  |
 
 ### TypeScript references (under `references/typescript/`)
 
-| Use case | Reference file |
-|---|---|
-| Instrumenting an LLM application | `typescript/instrumentation.md` |
-| Running evaluations / test suites | `typescript/evaluation.md` |
-| Running multi-turn simulations | `typescript/simulation.md` |
-| Custom metrics (**Currently not supported for TS**) | `typescript/custom-metrics.md` |
+| Use case                                            | Reference file                  |
+| --------------------------------------------------- | ------------------------------- |
+| Instrumenting an LLM application                    | `typescript/instrumentation.md` |
+| Running evaluations / test suites                   | `typescript/evaluation.md`      |
+| Running multi-turn simulations                      | `typescript/simulation.md`      |
+| Custom metrics (**Currently not supported for TS**) | `typescript/custom-metrics.md`  |
 
 ## Step 4 — Anti-Hallucination Rules
 

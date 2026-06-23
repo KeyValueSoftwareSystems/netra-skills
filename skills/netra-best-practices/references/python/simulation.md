@@ -10,6 +10,7 @@ Test AI agents with realistic, multi-turn conversations using the Python Netra S
 ## Overview
 
 Simulation runs a configurable set of multi-turn conversations against your agent. Each conversation:
+
 1. Starts with a user message from a dataset item.
 2. Your agent responds via a `BaseTask` implementation.
 3. The backend evaluates the response and decides whether to continue or stop.
@@ -66,9 +67,9 @@ def run(
 
 ### TaskResult fields
 
-| Field | Type | Description |
-|---|---|---|
-| `message` | `str` | The agent's response message |
+| Field        | Type  | Description                            |
+| ------------ | ----- | -------------------------------------- |
+| `message`    | `str` | The agent's response message           |
 | `session_id` | `str` | Session ID for conversation continuity |
 
 ### Async task example
@@ -114,14 +115,14 @@ result = Netra.simulation.run_simulation(
 )
 ```
 
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `name` | `str` | Yes | — | Display name for the simulation run |
-| `dataset_id` | `str` | Yes | — | ID of the dataset on the Netra platform |
-| `task` | `BaseTask` | Yes | — | Your task implementation |
-| `context` | `Any` | No | `None` | Additional context passed to the backend |
-| `max_concurrency` | `int` | No | `5` | Max parallel conversations |
-| `max_turns` | `int` | No | `50` | Max turns per conversation |
+| Parameter         | Type       | Required | Default | Description                              |
+| ----------------- | ---------- | -------- | ------- | ---------------------------------------- |
+| `name`            | `str`      | Yes      | —       | Display name for the simulation run      |
+| `dataset_id`      | `str`      | Yes      | —       | ID of the dataset on the Netra platform  |
+| `task`            | `BaseTask` | Yes      | —       | Your task implementation                 |
+| `context`         | `Any`      | No       | `None`  | Additional context passed to the backend |
+| `max_concurrency` | `int`      | No       | `5`     | Max parallel conversations               |
+| `max_turns`       | `int`      | No       | `50`    | Max turns per conversation               |
 
 Datasets for simulation are created and managed via the Netra dashboard.
 

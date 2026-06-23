@@ -17,7 +17,7 @@ Instrument TypeScript/Node.js LLM applications with Netra, following best practi
 
 Auto-instrumentation is the fastest way to start. Netra patches supported libraries and automatically captures spans for LLM calls, frameworks, vector DBs, HTTP, and more.
 
-Initialize Netra once at application startup, before using libraries you want instrumented. **The init call is async — always `await` it.** 
+Initialize Netra once at application startup, before using libraries you want instrumented. **The init call is async — always `await` it.**
 
 ```env
 NETRA_API_KEY=

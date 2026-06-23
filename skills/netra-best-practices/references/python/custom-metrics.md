@@ -93,7 +93,6 @@ latency.record(30.7, attributes={"operation": "write", "table": "orders"})
 
 Use observable (pull-based) instruments for system-level or slowly-changing values. Netra invokes registered callbacks periodically on each export cycle.
 
-
 ```python
 import psutil
 from opentelemetry.metrics import Observation

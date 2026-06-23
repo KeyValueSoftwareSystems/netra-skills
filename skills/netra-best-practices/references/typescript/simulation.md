@@ -10,6 +10,7 @@ Test AI agents with realistic, multi-turn conversations using the TypeScript Net
 ## Overview
 
 Simulation runs a configurable set of multi-turn conversations against your agent. Each conversation:
+
 1. Starts with a user message from a dataset item.
 2. Your agent responds via a `BaseTask` implementation.
 3. The backend evaluates the response and decides whether to continue or stop.
@@ -74,9 +75,9 @@ interface TaskResult {
 
 ### TaskResult fields
 
-| Field | Type | Description |
-|---|---|---|
-| `message` | `str` | The agent's response message |
+| Field       | Type  | Description                            |
+| ----------- | ----- | -------------------------------------- |
+| `message`   | `str` | The agent's response message           |
 | `sessionId` | `str` | Session ID for conversation continuity |
 
 **Note:** The TypeScript `BaseTask.run()` does not receive `files` — file handling differs from the Python SDK.
@@ -88,7 +89,7 @@ class MyTask extends BaseTask {
   async run(
     message: string,
     sessionId?: string,
-    files?: unknown[]
+    files?: unknown[],
   ): Promise<TaskResult> {
     const response = await myAgent.chat(message, {
       sessionId,
@@ -115,13 +116,13 @@ const result = await Netra.simulation.runSimulation({
 });
 ```
 
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `name` | `string` | Yes | — | Display name for the simulation run |
-| `datasetId` | `string` | Yes | — | ID of the dataset on the Netra platform |
-| `task` | `BaseTask` | Yes | — | Your task implementation |
-| `context` | `any` | No | `undefined` | Additional context passed to the backend |
-| `maxConcurrency` | `number` | No | `5` | Max parallel conversations (capped at 5) |
+| Field            | Type       | Required | Default     | Description                              |
+| ---------------- | ---------- | -------- | ----------- | ---------------------------------------- |
+| `name`           | `string`   | Yes      | —           | Display name for the simulation run      |
+| `datasetId`      | `string`   | Yes      | —           | ID of the dataset on the Netra platform  |
+| `task`           | `BaseTask` | Yes      | —           | Your task implementation                 |
+| `context`        | `any`      | No       | `undefined` | Additional context passed to the backend |
+| `maxConcurrency` | `number`   | No       | `5`         | Max parallel conversations (capped at 5) |
 
 ### SimulationResult interface
 

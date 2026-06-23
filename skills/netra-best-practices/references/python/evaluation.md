@@ -135,13 +135,13 @@ result = Netra.evaluation.run_test_suite(
 
 **Parameters:**
 
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `name` | `str` | Yes | Display name for the test run |
-| `data` | `Dataset` or `LocalDataset` | Yes | Dataset of items to evaluate |
-| `task` | `Callable[[Any], Any]` | Yes | Function that produces output from input |
-| `evaluators` | `List[BaseEvaluator]` | No | Local evaluators to score each item |
-| `max_concurrency` | `int` | No | Max parallel task executions (default 50) |
+| Parameter         | Type                        | Required | Description                               |
+| ----------------- | --------------------------- | -------- | ----------------------------------------- |
+| `name`            | `str`                       | Yes      | Display name for the test run             |
+| `data`            | `Dataset` or `LocalDataset` | Yes      | Dataset of items to evaluate              |
+| `task`            | `Callable[[Any], Any]`      | Yes      | Function that produces output from input  |
+| `evaluators`      | `List[BaseEvaluator]`       | No       | Local evaluators to score each item       |
+| `max_concurrency` | `int`                       | No       | Max parallel task executions (default 50) |
 
 Returns `A dictionary containing the run id and the results of the test suite` is validation succeeds and `None` if validation fails.
 
@@ -178,29 +178,29 @@ exact_match = ExactMatchEvaluator(
 
 **`EvaluatorConfig` fields:**
 
-| Field | Type | Description |
-|---|---|---|
-| `name` | `str` | Unique identifier for the evaluator |
-| `label` | `str` | Human-readable display name |
+| Field        | Type        | Description                              |
+| ------------ | ----------- | ---------------------------------------- |
+| `name`       | `str`       | Unique identifier for the evaluator      |
+| `label`      | `str`       | Human-readable display name              |
 | `score_type` | `ScoreType` | `BOOLEAN`, `NUMERICAL`, or `CATEGORICAL` |
 
 **`EvaluatorContext` fields (passed to `evaluate`):**
 
-| Field | Type | Description |
-|---|---|---|
-| `input` | `Any` | Original input from the dataset item |
-| `task_output` | `Any` | Output returned by the task function |
-| `expected_output` | `Any` | Expected output (may be `None`) |
-| `metadata` | `Optional[Dict]` | Metadata from the dataset item |
+| Field             | Type             | Description                          |
+| ----------------- | ---------------- | ------------------------------------ |
+| `input`           | `Any`            | Original input from the dataset item |
+| `task_output`     | `Any`            | Output returned by the task function |
+| `expected_output` | `Any`            | Expected output (may be `None`)      |
+| `metadata`        | `Optional[Dict]` | Metadata from the dataset item       |
 
 **`EvaluatorOutput` fields (returned from `evaluate`):**
 
-| Field | Type | Description |
-|---|---|---|
-| `evaluator_name` | `str` | Must match `config.name` |
-| `result` | `Any` | Score value (bool, number, or string) |
-| `is_passed` | `bool` | Whether this item passed |
-| `reason` | `Optional[str]` | Human-readable explanation |
+| Field            | Type            | Description                           |
+| ---------------- | --------------- | ------------------------------------- |
+| `evaluator_name` | `str`           | Must match `config.name`              |
+| `result`         | `Any`           | Score value (bool, number, or string) |
+| `is_passed`      | `bool`          | Whether this item passed              |
+| `reason`         | `Optional[str]` | Human-readable explanation            |
 
 `evaluate()` can be sync or async — the framework awaits coroutines automatically.
 
@@ -230,17 +230,17 @@ relevance = RelevanceScoreEvaluator(
 
 In addition to local evaluators, Netra provides built-in platform evaluators that run server-side after trace ingestion. These are configured via the Netra dashboard and attached to datasets. Available types:
 
-| Evaluator | Description |
-|-----------|-------------|
-| **LLM-as-Judge** | Uses an LLM to grade outputs against a rubric or criteria. |
-| **Semantic Similarity** | Compares output to expected output using embedding similarity. |
-| **Tool Accuracy** | Validates that the correct tools were called with expected arguments. |
-| **Cost** | Evaluates total cost of the traced LLM calls. |
-| **Latency** | Evaluates end-to-end latency of the traced execution. |
-| **Token** | Evaluates total token usage across the trace. |
-| **Regex** | Matches output against a regular expression pattern. |
-| **JSON** | Validates output against a JSON schema. |
-| **Code** | Runs custom code-based evaluation logic server-side. |
+| Evaluator               | Description                                                           |
+| ----------------------- | --------------------------------------------------------------------- |
+| **LLM-as-Judge**        | Uses an LLM to grade outputs against a rubric or criteria.            |
+| **Semantic Similarity** | Compares output to expected output using embedding similarity.        |
+| **Tool Accuracy**       | Validates that the correct tools were called with expected arguments. |
+| **Cost**                | Evaluates total cost of the traced LLM calls.                         |
+| **Latency**             | Evaluates end-to-end latency of the traced execution.                 |
+| **Token**               | Evaluates total token usage across the trace.                         |
+| **Regex**               | Matches output against a regular expression pattern.                  |
+| **JSON**                | Validates output against a JSON schema.                               |
+| **Code**                | Runs custom code-based evaluation logic server-side.                  |
 
 ## Full Example
 

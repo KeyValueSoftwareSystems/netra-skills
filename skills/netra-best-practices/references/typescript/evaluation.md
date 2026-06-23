@@ -55,7 +55,8 @@ const dataset: Dataset = {
     },
     {
       input: "Summarize this article in one sentence.",
-      expectedOutput: "The article discusses recent advances in renewable energy.",
+      expectedOutput:
+        "The article discusses recent advances in renewable energy.",
       metadata: { category: "summarization" },
     },
   ],
@@ -67,7 +68,10 @@ const dataset: Dataset = {
 Create a persistent dataset on the Netra platform, add items via API, then fetch them for test runs. Useful when datasets are shared across runs or managed from the dashboard.
 
 ```typescript
-const response = await Netra.evaluation.createDataset("QA Golden Set", ["qa", "v1"]);
+const response = await Netra.evaluation.createDataset("QA Golden Set", [
+  "qa",
+  "v1",
+]);
 const datasetId = response!.id;
 
 await Netra.evaluation.addDatasetItem(datasetId, {
@@ -115,13 +119,13 @@ const result = await Netra.evaluation.runTestSuite(
 );
 ```
 
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `name` | `string` | Yes | Display name for the test run |
-| `data` | `Dataset` | Yes | Dataset of items to evaluate |
-| `task` | `TaskFunction` | Yes | Function producing output from input |
-| `evaluators` | `any[]` | No | Evaluator objects to score each item |
-| `maxConcurrency` | `number` | No | Max parallel task executions (default 50) |
+| Parameter        | Type           | Required | Description                               |
+| ---------------- | -------------- | -------- | ----------------------------------------- |
+| `name`           | `string`       | Yes      | Display name for the test run             |
+| `data`           | `Dataset`      | Yes      | Dataset of items to evaluate              |
+| `task`           | `TaskFunction` | Yes      | Function producing output from input      |
+| `evaluators`     | `any[]`        | No       | Evaluator objects to score each item      |
+| `maxConcurrency` | `number`       | No       | Max parallel task executions (default 50) |
 
 Returns `results of the test suite` if validation succeeds and `null` if validation fails.
 
@@ -191,7 +195,11 @@ async function qaTask(input: any): Promise<string> {
 }
 
 const containsExpected = {
-  config: { name: "contains_expected", label: "Contains Expected", scoreType: "boolean" },
+  config: {
+    name: "contains_expected",
+    label: "Contains Expected",
+    scoreType: "boolean",
+  },
   evaluate(ctx: { input: any; taskOutput: any; expectedOutput: any }) {
     const output = String(ctx.taskOutput).toLowerCase();
     const expected = String(ctx.expectedOutput).toLowerCase();
@@ -200,7 +208,9 @@ const containsExpected = {
       evaluatorName: this.config.name,
       result: contains,
       isPassed: contains,
-      reason: contains ? "Contains expected answer" : "Expected answer not found",
+      reason: contains
+        ? "Contains expected answer"
+        : "Expected answer not found",
     };
   },
 };
