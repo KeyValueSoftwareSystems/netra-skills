@@ -1,5 +1,5 @@
 ---
-name: ndd-generate
+name: netra-evaluation-setup
 description: >-
   Generate evaluation datasets from QA/dev specification documents. Analyzes
   spec sheets, discovers agent span structure from code, recommends evaluators,
@@ -9,7 +9,7 @@ description: >-
   specification document.
 ---
 
-# NDD Generate — Specification-Driven Dataset Planning
+# Netra Evaluation Setup — Specification-Driven Dataset Planning
 
 This skill takes a QA/dev specification document and produces a complete,
 editable evaluation plan — dataset items, evaluators, variable mappings,
