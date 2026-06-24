@@ -1,11 +1,11 @@
 ---
-name: netra-custom-metrics
-description: Emit custom metrics using the Netra Meter API. Use when tracking application-specific counters, histograms, gauges, or any numeric signal beyond what auto-instrumentation provides.
+name: netra-python-custom-metrics
+description: Emit custom metrics using the Python Netra Meter API. Use when tracking application-specific counters, histograms, gauges, or any numeric signal beyond what auto-instrumentation provides.
 ---
 
-# Netra Custom Metrics
+# Python Custom Metrics
 
-Emit and export application-specific metrics using the OpenTelemetry-backed `Meter` API exposed by the Netra SDK.
+Emit and export application-specific metrics using the OpenTelemetry-backed `Meter` API exposed by the Python Netra SDK.
 
 ## Workflow
 
@@ -15,7 +15,7 @@ Emit and export application-specific metrics using the OpenTelemetry-backed `Met
 - **Always** call `Netra.shutdown()` at the end of the application lifecycle to ensure metrics are flushed to the backend.
 - Verify exports are reaching the backend using the Netra dashboard or OTLP endpoint logs.
 
-# Initialization
+## Initialization
 
 Enable the metrics pipeline in `Netra.init` and obtain a `Meter` scoped to your service or module.
 
@@ -24,7 +24,7 @@ NETRA_API_KEY=
 NETRA_OTLP_ENDPOINT=
 ```
 
-```py
+```python
 import os
 from netra import Netra
 
@@ -45,11 +45,11 @@ meter = Netra.get_meter("my_service")
 
 `get_meter` accepts a `name` (instrumentation scope, defaults to `"netra"`) and an optional `version` string. If `enable_metrics` is `False` or no OTLP endpoint is configured, a no-op `MeterProvider` is installed — your code can still call `get_meter` and record metrics safely, they will simply be discarded.
 
-# Counter
+## Counter
 
 Monotonically increasing value — use for request counts, completed jobs, or any value that only goes up.
 
-```py
+```python
 request_counter = meter.create_counter(
     name="http.requests",
     description="Number of HTTP requests processed",
@@ -59,11 +59,11 @@ request_counter = meter.create_counter(
 request_counter.add(1, attributes={"route": "/api/health", "status": "ok"})
 ```
 
-# UpDownCounter
+## UpDownCounter
 
 Value that can increase or decrease — use for active connections, queue depth, or in-flight requests.
 
-```py
+```python
 active_connections = meter.create_up_down_counter(
     name="connections.active",
     description="Number of active client connections",
@@ -74,11 +74,11 @@ active_connections.add(1,  attributes={"region": "us-east-1"})  # connection ope
 active_connections.add(-1, attributes={"region": "us-east-1"})  # connection closed
 ```
 
-# Histogram
+## Histogram
 
 Distribution of measurements — use for latency, payload sizes, token counts, or any value where the distribution matters.
 
-```py
+```python
 latency = meter.create_histogram(
     name="db.query.latency_ms",
     description="Database query latency",
@@ -93,7 +93,7 @@ latency.record(30.7, attributes={"operation": "write", "table": "orders"})
 
 Use observable (pull-based) instruments for system-level or slowly-changing values. Netra invokes registered callbacks periodically on each export cycle.
 
-```py
+```python
 import psutil
 from opentelemetry.metrics import Observation
 
@@ -118,8 +118,6 @@ meter.create_observable_gauge(
 ```
 
 *NOTE*: Callbacks must be fast and non-blocking. Heavy I/O inside a callback will stall the export cycle.
-
-
 
 > [!WARNING]
 > **Flush Your Metrics:** Always call `Netra.shutdown()` on graceful termination. Metrics are buffered and exported in batches (defined by `metrics_export_interval_ms`). If the application exits without a shutdown call, the last batch of metrics will likely be lost.
