@@ -257,7 +257,7 @@ Netra.evaluation.run_test_suite(
 If the specification describes a conversation, workflow, support interaction, troubleshooting flow, or any multi-step exchange:
 
 - Set Turn Type = `multi`
-- Set Eval Type = `session` (auto-inferred by `netra_create_evaluator` when `turnType: "multi"` — no need to specify unless overriding)
+- Set Eval Type = `session` — MUST be explicitly passed to `netra_create_evaluator`
 - Use `Netra.simulation.run_simulation()` for execution
 
 Never invoke the agent directly for simulation execution.
@@ -368,11 +368,26 @@ Required Task Implementation:
 
 **Category:** {happy-path | negative | edge-case | safety | performance}
 
+For single-turn items:
+
 | Field | Value |
 |---|---|
 | **Input** | {the test input / user message} |
 | **Expected Output** | {the expected correct response or behavior} |
 | **Provider Config** | {none — use evaluator default \| provider_id: {id}, model: {model}} |
+
+For multi-turn items:
+
+| Field | Value |
+|---|---|
+| **Input** | `{}` (empty object — simulation engine generates messages) |
+| **Expected Output** | `null` |
+| **ScenarioName** | {concise display name for the scenario} |
+| **Scenario** | {the actual goal/scenario description that evaluators use to judge success} |
+| **Persona** | {who the simulated user is} |
+| **Max Turns** | {number} |
+| **Behaviour Instructions** | {step-by-step script for simulated user} |
+| **Provider Config** | provider_id: {id}, model: {model} |
 
 **Evaluators:**
 
@@ -471,17 +486,40 @@ Execute these MCP calls in order:
    b. netra_create_evaluator
       → name
       → libraryEvaluatorId
+      → type: MUST match the library evaluator's type exactly.
+        Check the library evaluator's `type` field (e.g. "llm-as-judge", "tool_accuracy",
+        "regex", "code") and pass the SAME type when creating the project evaluator.
+        If the library evaluator is `tool_accuracy` (rule-based), create it as `tool_accuracy`.
+        If the library evaluator is `llm-as-judge`, create it as `llm-as-judge`.
+        Do NOT rely on the API to inherit the type from `libraryEvaluatorId` — it may
+        default to `llm-as-judge` regardless, causing rule-based evaluators to fail with
+        "Missing required config: model, provider_id, or prompt" because the engine
+        incorrectly treats them as LLM evaluators.
+        If type mismatch is suspected, create the evaluator as a custom evaluator
+        with explicit `type` and omit `libraryEvaluatorId`.
       → turnType: "single" | "multi"
-      → evalType: omit — auto-inferred ("turn" for single, "session" for multi)
-      → config: ALWAYS pass explicitly using the resolved default from step 2a:
-        {
-          "model": "{model}",
-          "provider_id": "{providerConfigurationId}"
-        }
-        Do NOT omit config or rely on auto-resolution — the evaluation engine
-        requires `provider_id` (snake_case) in the config to execute LLM evaluators.
-        Omitting config or using the wrong field name causes evaluators to fail
-        at runtime with "Missing required config: model, provider_id, or prompt".
+      → evalType: MUST be explicitly set
+        - For single-turn evaluators: pass evalType: "turn"
+        - For multi-turn evaluators: pass evalType: "session"
+        Do NOT omit evalType — the API does NOT auto-infer it from turnType.
+        Omitting evalType for multi-turn evaluators causes it to default to "turn",
+        which means evaluators run per-message instead of per-session, resulting in
+        evaluation scores showing as "not available" for simulation runs.
+      → config: Must match the evaluator type.
+        - For LLM-based evaluators (`llm-as-judge`): ALWAYS pass explicitly using
+          the resolved default from step 2a:
+          {
+            "model": "{model}",
+            "provider_id": "{providerConfigurationId}"
+          }
+          Do NOT omit config or rely on auto-resolution — the evaluation engine
+          requires `provider_id` (snake_case) in the config to execute LLM evaluators.
+          Omitting config or using the wrong field name causes evaluators to fail
+          at runtime with "Missing required config: model, provider_id, or prompt".
+        - For rule-based evaluators (`tool_accuracy`): pass the evaluator-specific
+          config (e.g. `{"matchType": "partial"}`). Do NOT include model or provider_id.
+        - For other code/regex evaluators: pass their specific config as defined in
+          the library evaluator.
       → capture evaluatorId from response
 
    c. Verify the created evaluator config:
@@ -501,17 +539,41 @@ Execute these MCP calls in order:
 3. For each item:
    netra_create_dataset_item
    → datasetId, input, expectedOutput
-   → metadata (for multi-turn: scenario, persona, max_turns, behaviour_instructions)
+   → metadata (for multi-turn: scenarioName, persona, max_turns, behaviour_instructions)
    → providerConfig
 
   For multi-turn datasets:
-    - metadata
+    - input: MUST be an empty object `{}`
+      The simulation engine generates the first user message from
+      `metadata.behaviour_instructions`, NOT from the `input` field.
+      If `input` is set to a string, the scenario name will appear empty
+      in the Netra dashboard because the UI reads the scenario identifier
+      from `metadata.scenarioName`, and a string `input` interferes with this.
+    - expectedOutput: set to `null` or omit
+      The simulation evaluates the conversation as a whole via session-level
+      evaluators, not against a single expected output.
+    - metadata: REQUIRED — this is the primary configuration for the simulation item
      {
-       "scenario": "{scenarioName}",
+       "scenarioName": "{scenarioName}",
+       "scenario": "{scenario}",
        "persona": "...",
        "max_turns": ...,
        "behaviour_instructions": "..."
      }
+      - `scenarioName`: The scenario display name shown in the Netra dashboard.
+        A concise, human-readable label for the test case (e.g. "Iterative Project Refinement").
+      - `scenario`: The actual scenario description / goal that the simulation must achieve.
+        This is the detailed goal text that session-level evaluators (Goal Fulfillment,
+        Conversation Completeness) use to judge whether the agent succeeded. It describes
+        WHAT the conversation should accomplish, not just a label.
+        Example: "Get a complete engineering spec for a smart plant watering system,
+        refining requirements through conversation."
+      - `persona`: Who the simulated user pretends to be.
+      - `max_turns`: Maximum conversation turns before the simulation stops.
+      - `behaviour_instructions`: Step-by-step script for the simulated user.
+        The simulation engine uses this to generate all user messages including
+        the first one. Be specific about what the simulated user should say or
+        ask in each turn.
     - Always include providerConfig.
     - If no model is specified in the plan, use the organization's default provider configuration from netra_get_default_llm_configuration.
     - Example:
@@ -524,6 +586,8 @@ Execute these MCP calls in order:
     ```
 
   For single-turn datasets:
+    - input: a string containing the test message
+    - expectedOutput: a string containing the expected agent response
     - providerConfig is optional.
     - Include only when the item requires a model different from the evaluator default.
    → evaluators (optional): item-level evaluator overrides with variableMapping
@@ -531,6 +595,12 @@ Execute these MCP calls in order:
 4. Map evaluators to the dataset:
    netra_map_evaluator_to_dataset
    → datasetId, evaluatorId, variableMapping
+
+   For single-turn evaluators: pass the full variableMapping (user_query, response, etc.)
+   For multi-turn (session) evaluators: pass an empty object `variableMapping: {}`
+     Session evaluators auto-resolve their variables from conversation context.
+     However, the `variableMapping` parameter MUST still be provided as `{}` —
+     omitting it entirely causes "Cannot convert undefined or null to object" errors.
 ```
 
 If MCP tools for creation are not yet available, output a message:
@@ -607,13 +677,48 @@ Bad:
 
 19. Scenario names should be unique within the dataset whenever possible.
 
-20. When creating evaluators for multi-turn datasets, `evalType` is automatically set to `"session"` by `netra_create_evaluator` when `turnType: "multi"` is passed. Do not specify `evalType` unless you explicitly need `"turn"`-level evaluation within a multi-turn dataset.
+20. When creating evaluators for multi-turn datasets, ALWAYS explicitly pass `evalType: "session"`.
+
+    The `netra_create_evaluator` API does NOT auto-infer `evalType` from `turnType`.
+    If `evalType` is omitted, it defaults to `"turn"` regardless of the `turnType` value.
+    This causes multi-turn simulation evaluators to fail silently — conversations are
+    recorded correctly but evaluation scores show as "not available" because turn-level
+    evaluators cannot score session-level simulation data.
+
+    Correct (multi-turn):
+    ```json
+    {
+      "turnType": "multi",
+      "evalType": "session"
+    }
+    ```
+
+    Wrong (will produce "not available" scores):
+    ```json
+    {
+      "turnType": "multi"
+    }
+    ```
+
+    Only use `evalType: "turn"` within a multi-turn dataset when you explicitly need
+    per-message evaluation rather than whole-conversation evaluation.
 
 21. Item-level `providerConfig` (`{ provider_id, model }`) overrides the evaluator's default model for that specific item only. Use it only when a specific scenario requires a different model. For uniform model usage across all items, configure the model at the evaluator level — do not set `providerConfig` on every item.
 
-22. Multi-turn dataset items must always be created with a `providerConfig`.
+22. Multi-turn dataset items must always be created with:
+    - `input`: an empty object `{}` (NOT a string — the simulation engine generates user messages from metadata)
+    - `expectedOutput`: `null` or omitted (session-level evaluators score the full conversation)
+    - `metadata`: containing `scenarioName`, `scenario`, `persona`, `max_turns`, and `behaviour_instructions`
+      - `scenarioName`: concise display label (e.g. "Iterative Project Refinement")
+      - `scenario`: the actual goal/scenario description that evaluators use to judge success
+        (e.g. "Get a complete engineering spec for a smart plant watering system, refining requirements through conversation")
+    - `providerConfig`: always required
 
-    If the specification does not provide one, resolve the organization's default provider configuration using `netra_get_default_llm_configuration` and attach it to every multi-turn dataset item during creation.
+    If the specification does not provide a providerConfig, resolve the organization's default provider configuration using `netra_get_default_llm_configuration` and attach it to every multi-turn dataset item during creation.
+
+    Setting `input` to a string causes the scenario name to appear empty in the Netra
+    dashboard because the UI reads the scenario display name from `metadata.scenarioName`,
+    and a string input overrides the expected structure.
 
 23. Before creating a multi-turn dataset item, the system must ensure a valid provider configuration exists.
     
@@ -668,6 +773,45 @@ Bad:
 
     The `data` parameter requires a `Dataset` object, not a dataset ID string.
     Use `Netra.evaluation.get_dataset()` to fetch items, then wrap in `Dataset(items=...)`.
+
+27. When mapping multi-turn (session) evaluators to a dataset using `netra_map_evaluator_to_dataset`,
+    ALWAYS pass `variableMapping: {}` (empty object). Session-level evaluators auto-resolve their
+    variables from the conversation context and do not require explicit variable mappings.
+    However, the `variableMapping` parameter itself MUST be provided — omitting it entirely
+    causes the API to throw "Cannot convert undefined or null to object".
+
+28. Multi-turn dataset items MUST use `input: {}` (empty object).
+    The simulation engine generates all user messages — including the first one — from
+    `metadata.behaviour_instructions`. The `input` string is NOT sent as the first message.
+    Using a string for `input` causes the Netra dashboard to show an empty scenario name
+    because the UI expects `metadata.scenarioName` to be the primary identifier when `input`
+    is an empty object.
+
+    Both `scenarioName` and `scenario` MUST be present in metadata:
+    - `scenarioName` = the short display label shown in the dashboard
+    - `scenario` = the actual goal/scenario description that session evaluators
+      (Goal Fulfillment, Conversation Completeness) read to judge success
+
+    Omitting `scenario` causes evaluators to receive an empty goal, resulting in
+    inaccurate or failing evaluation scores.
+
+29. When adding a library evaluator to My Evaluators, the project evaluator's `type` MUST match the
+    library evaluator's original type exactly.
+
+    - If the library evaluator is `tool_accuracy` (rule-based), create it with `type: "tool_accuracy"`
+      and pass its specific config (e.g. `{"matchType": "partial"}`). Do NOT include model/provider_id.
+    - If the library evaluator is `llm-as-judge`, create it with `type: "llm-as-judge"` and pass
+      model/provider_id config.
+    - If the library evaluator is `regex` or `code`, create it with the matching type.
+
+    The `netra_create_evaluator` API may silently default to `llm-as-judge` when using
+    `libraryEvaluatorId`, regardless of the library evaluator's actual type. This causes rule-based
+    evaluators (like `tool_accuracy`) to fail at runtime because the engine expects LLM config
+    (`model`, `provider_id`, `prompt`) that rule-based evaluators don't use.
+
+    If you encounter this type mismatch, create the evaluator as a **custom evaluator** with explicit
+    `type` set to the correct value and omit `libraryEvaluatorId`. This bypasses the auto-defaulting
+    behavior and ensures the evaluator runs with the correct execution logic.
 
 ## Reference
 
