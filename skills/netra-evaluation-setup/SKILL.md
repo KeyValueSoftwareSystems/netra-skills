@@ -473,8 +473,30 @@ Execute these MCP calls in order:
       → libraryEvaluatorId
       → turnType: "single" | "multi"
       → evalType: omit — auto-inferred ("turn" for single, "session" for multi)
-      → config is auto-resolved from org default when omitted
+      → config: ALWAYS pass explicitly using the resolved default from step 2a:
+        {
+          "model": "{model}",
+          "provider_id": "{providerConfigurationId}"
+        }
+        Do NOT omit config or rely on auto-resolution — the evaluation engine
+        requires `provider_id` (snake_case) in the config to execute LLM evaluators.
+        Omitting config or using the wrong field name causes evaluators to fail
+        at runtime with "Missing required config: model, provider_id, or prompt".
       → capture evaluatorId from response
+
+   c. Verify the created evaluator config:
+
+      After creation, inspect the response `config` object. Confirm it contains
+      `provider_id` (snake_case). If the response only shows `providerId` (camelCase)
+      without `provider_id`, the evaluator will fail at eval time.
+
+      Valid response config:
+      {
+        "model": "gpt-4o",
+        "provider_id": "dcffa74c-..."
+      }
+
+      If verification fails, recreate the evaluator with explicit config.
 
 3. For each item:
    netra_create_dataset_item
@@ -562,6 +584,7 @@ After successful creation, output:
     - `Netra.simulation.run_simulation()`
 
 14. Resolve the organization's default provider/model only when creating a project evaluator from a library evaluator.
+    Once resolved, pass the config explicitly to `netra_create_evaluator` using `provider_id` (snake_case).
 
 15. Do not fetch provider/model information during evaluator recommendation unless evaluator creation is required.
 
@@ -602,6 +625,49 @@ Bad:
     ```
     
     Do not create the dataset items until a valid provider configuration is available.
+
+24. When creating LLM-based evaluators, ALWAYS pass explicit `config` with `model` and `provider_id` (snake_case).
+
+    Do NOT rely on auto-resolution of provider config — the MCP tool stores the field as `providerId` (camelCase),
+    but the evaluation engine requires `provider_id` (snake_case). This mismatch causes evaluators to silently fail
+    at runtime with "Missing required config: model, provider_id, or prompt", resulting in null scores on all items.
+
+    Correct:
+    ```json
+    {
+      "model": "gpt-4o",
+      "provider_id": "dcffa74c-..."
+    }
+    ```
+
+    Wrong (will fail at eval time):
+    ```json
+    {
+      "model": "gpt-4o",
+      "providerId": "dcffa74c-..."
+    }
+    ```
+
+25. MCP tools (`netra_create_test_run`, `netra_submit_test_run_item`) are for manual/programmatic
+    result submission only. They require a `trace_id` from an existing trace. Do NOT use them as a
+    substitute for `Netra.evaluation.run_test_suite()` or `Netra.simulation.run_simulation()` — those
+    SDK methods handle agent execution, trace capture, and result submission automatically.
+
+26. When using `Netra.evaluation.run_test_suite()` with a remote Netra dataset:
+
+    ```python
+    response = Netra.evaluation.get_dataset(dataset_id)
+    dataset = Dataset(items=response.items)
+    result = Netra.evaluation.run_test_suite(
+        name="...",
+        data=dataset,
+        task=agent_task_function,
+        max_concurrency=3,
+    )
+    ```
+
+    The `data` parameter requires a `Dataset` object, not a dataset ID string.
+    Use `Netra.evaluation.get_dataset()` to fetch items, then wrap in `Dataset(items=...)`.
 
 ## Reference
 
