@@ -19,6 +19,28 @@ and pass criteria — then creates everything in Netra on user approval.
 
 Execute these phases in order. Complete each phase before moving to the next.
 
+### Phase 0: Verify Provider Configuration
+
+Before starting any planning or creation work, verify that the organization has a default provider configured.
+
+Call `netra_get_default_llm_configuration` via MCP.
+
+- If a valid configuration is returned (containing `provider`, `model`, and `providerConfigurationId`), proceed to Phase 1.
+- If null or an error is returned, **stop immediately** and inform the user:
+
+```
+⚠️ No default provider configured.
+
+Evaluation and dataset creation require a default LLM provider in your organization.
+Please configure a default provider in the Netra dashboard before proceeding:
+
+  Settings → Providers → Set Default
+
+Once configured, run this skill again.
+```
+
+Do not proceed to any subsequent phase until a valid default provider is confirmed.
+
 ### Phase 1: Ingest the Specification
 
 1. Read the specification document provided by the user (file path, pasted text, or URL).
@@ -795,7 +817,12 @@ Bad:
     Omitting `scenario` causes evaluators to receive an empty goal, resulting in
     inaccurate or failing evaluation scores.
 
-29. When adding a library evaluator to My Evaluators, the project evaluator's `type` MUST match the
+29. A default provider configuration MUST exist before any MCP-based creation (datasets, evaluators, dataset items, evaluator mappings).
+    Phase 0 verifies this upfront by calling `netra_get_default_llm_configuration`. If no default provider
+    is configured, the entire workflow is blocked — do not proceed to planning phases or creation.
+    This check prevents wasted effort generating plans that cannot be materialized.
+
+30. When adding a library evaluator to My Evaluators, the project evaluator's `type` MUST match the
     library evaluator's original type exactly.
 
     - If the library evaluator is `tool_accuracy` (rule-based), create it with `type: "tool_accuracy"`
