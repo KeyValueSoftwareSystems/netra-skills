@@ -166,7 +166,34 @@ Apply these mapping rules:
 
 These are starting recommendations. Always consider the specific scenario semantics — an evaluator makes sense only if its purpose aligns with what the test case validates.
 
-**Step 3c: Configure variable mappings**
+**Step 3c: Identify configurable variables**
+
+Some evaluators require **user-provided configuration** that cannot be auto-resolved from
+conversation context or metadata. These are defined as `configurableVariables` in the evaluator
+library. If a configurable variable is left empty, the evaluator will fail or produce unreliable
+scores (e.g., "Cannot be evaluated" with a degraded score).
+
+Evaluators with configurable variables:
+
+| Evaluator | Variable | Type | What to provide |
+|---|---|---|---|
+| **Guideline Adherence** | `assistant_instructions` | string | The full system prompt or instructions given to the AI agent — what it must do, how it should behave, security rules, escalation guidelines |
+| **Guideline Adherence** | `assistant_constraints` | string | Constraints the AI agent must respect — things it must NOT do, boundaries, prohibited actions. Also auto-resolved from `metadata.assistant_constraints` but configurable value takes precedence |
+| **Factual Accuracy** (multi-turn) | `reference_facts` | json | Facts the agent should communicate correctly — product details, policies, prices, dates. Also auto-resolved from `metadata.reference_facts` but configurable value takes precedence |
+
+Variable resolution priority for session evaluators:
+1. `evaluatorConfigs[].configuredValues` (highest priority — user-provided)
+2. Session metadata auto-resolution (e.g., `metadata.assistant_constraints`, `metadata.reference_facts`)
+3. Empty string (fallback — causes evaluation failures)
+
+`assistant_instructions` has NO auto-resolution path — it MUST be provided via `evaluatorConfigs`.
+
+When an evaluator with configurable variables is recommended:
+- Ask the user to provide the values
+- Include them in the plan under a "Configurable Variables" section for each evaluator
+- If the user cannot provide them yet, mark them as `⚠️ NEEDS CONFIGURATION` in the plan
+
+**Step 3d: Configure variable mappings**
 
 For each evaluator attached to a test case, map every required variable to a data source.
 
@@ -216,7 +243,7 @@ expected_*     → source: literal value from the spec
 
 When you cannot confidently determine a mapping, mark it as `⚠️ NEEDS CONFIGURATION` in the plan and explain why.
 
-### Phase 3d: Set pass criteria and model
+### Phase 3e: Set pass criteria and model
 
 - Use the evaluator's default pass criteria unless the spec states otherwise.
 - If the user specifies a model preference, apply it to all LLM evaluators shown in the plan.
@@ -245,7 +272,7 @@ Rules:
 - If a scenario explicitly requires a different model, override the default by setting the item's `providerConfig` accordingly.
 - For **single-turn datasets**, `providerConfig` is optional and should only be supplied when an item requires a model different from the evaluator default.
 
-### Phase 3e: Determine Execution Strategy
+### Phase 3f: Determine Execution Strategy
 
 Before generating the final plan, determine whether the specification describes a single-turn evaluation or a multi-turn simulation.
 
@@ -425,6 +452,31 @@ For multi-turn items:
 |---|---|---|
 | {var-name} | {Agent Response / Span: {span-name} / Dataset: expectedOutput / Trace: {metric} / Value} | `{jmespath-expression}` |
 | {var-name} | ... | `...` |
+
+If the evaluator has configurable variables, include:
+
+**Configurable Variables (user-provided):**
+
+| Variable | Value |
+|---|---|
+| {var-name} | {user-provided value or ⚠️ NEEDS CONFIGURATION} |
+
+Example for Guideline Adherence:
+
+**Configurable Variables (user-provided):**
+
+| Variable | Value |
+|---|---|
+| `assistant_instructions` | You are a helpful customer support agent. Always greet the user professionally... |
+| `assistant_constraints` | Must NOT ask for credit card details. Must escalate billing issues to human agents... |
+
+Example for Factual Accuracy (multi-turn):
+
+**Configurable Variables (user-provided):**
+
+| Variable | Value |
+|---|---|
+| `reference_facts` | {"return_policy": "14 days", "shipping_time": "3-5 business days", ...} |
 
 #### Evaluator: {evaluator-name-2}
 
@@ -623,6 +675,87 @@ Execute these MCP calls in order:
      Session evaluators auto-resolve their variables from conversation context.
      However, the `variableMapping` parameter MUST still be provided as `{}` —
      omitting it entirely causes "Cannot convert undefined or null to object" errors.
+
+5. Set configurable variables for evaluators that require them:
+
+   If any mapped evaluator has configurable variables (Guideline Adherence, Factual Accuracy multi-turn),
+   include `evaluatorConfigs` in the dataset item metadata.
+
+   `evaluatorConfigs` is an array of objects, each with:
+   - `id`: the evaluator ID (the project evaluator ID created in step 2)
+   - `configuredValues`: an object mapping variable names to their user-provided values
+
+   Include `evaluatorConfigs` in the `metadata` field when calling `netra_create_dataset_item`
+   or `netra_update_dataset_item`.
+
+   Example for Guideline Adherence:
+
+   ```json
+   {
+     "metadata": {
+       "scenarioName": "Customer Support",
+       "scenario": "...",
+       "persona": "...",
+       "max_turns": 5,
+       "behaviour_instructions": "...",
+       "evaluatorConfigs": [
+         {
+           "id": "{guideline-adherence-evaluator-id}",
+           "configuredValues": {
+             "assistant_instructions": "You are a helpful customer support agent. Always greet the user professionally, stay on topic, follow security rules...",
+             "assistant_constraints": "Must NOT ask for credit card details. Must escalate billing issues to human agents..."
+           }
+         }
+       ]
+     }
+   }
+   ```
+
+   Example for Factual Accuracy (multi-turn):
+
+   ```json
+   {
+     "metadata": {
+       "evaluatorConfigs": [
+         {
+           "id": "{factual-accuracy-evaluator-id}",
+           "configuredValues": {
+             "reference_facts": "{\"return_policy\": \"14 days\", \"shipping_time\": \"3-5 business days\"}"
+           }
+         }
+       ]
+     }
+   }
+   ```
+
+   Multiple evaluators can be configured in the same `evaluatorConfigs` array:
+
+   ```json
+   {
+     "metadata": {
+       "evaluatorConfigs": [
+         {
+           "id": "{guideline-adherence-evaluator-id}",
+           "configuredValues": {
+             "assistant_instructions": "...",
+             "assistant_constraints": "..."
+           }
+         },
+         {
+           "id": "{factual-accuracy-evaluator-id}",
+           "configuredValues": {
+             "reference_facts": "..."
+           }
+         }
+       ]
+     }
+   }
+   ```
+
+   CRITICAL: If `evaluatorConfigs` is not set for evaluators that require configurable variables,
+   those evaluators will receive empty values and produce unreliable scores. The Guideline Adherence
+   evaluator will report "Cannot be evaluated" for AWARENESS and CONSISTENCY criteria, and
+   the Factual Accuracy evaluator will default-pass because it sees no reference facts to check against.
 ```
 
 If MCP tools for creation are not yet available, output a message:
@@ -839,6 +972,45 @@ Bad:
     If you encounter this type mismatch, create the evaluator as a **custom evaluator** with explicit
     `type` set to the correct value and omit `libraryEvaluatorId`. This bypasses the auto-defaulting
     behavior and ensures the evaluator runs with the correct execution logic.
+
+31. When using evaluators with configurable variables, ALWAYS include `evaluatorConfigs` in dataset
+    item metadata (or dataset metadata) with the correct evaluator ID and variable values.
+
+    Evaluators with configurable variables:
+
+    | Evaluator | Configurable Variables |
+    |---|---|
+    | Guideline Adherence | `assistant_instructions` (REQUIRED — no auto-resolution), `assistant_constraints` (optional — auto-resolved from `metadata.assistant_constraints` but configurable value takes precedence) |
+    | Factual Accuracy (multi-turn) | `reference_facts` (optional — auto-resolved from `metadata.reference_facts` but configurable value takes precedence) |
+
+    `evaluatorConfigs` format in metadata:
+
+    ```json
+    {
+      "evaluatorConfigs": [
+        {
+          "id": "{evaluator-id}",
+          "configuredValues": {
+            "variable_name": "value"
+          }
+        }
+      ]
+    }
+    ```
+
+    Without `evaluatorConfigs`:
+    - **Guideline Adherence** will receive empty `assistant_instructions`, causing the evaluator
+      to report "The evaluation is severely limited because the assistant's instructions were not
+      provided" and produce a degraded score (typically 0.5) that fails the >= 0.6 pass criteria.
+    - **Factual Accuracy (multi-turn)** will receive empty `reference_facts` if not set in
+      `metadata.reference_facts` either, causing it to default-pass with no meaningful evaluation.
+
+    The `assistant_instructions` variable is the most critical — it has NO fallback auto-resolution
+    from any metadata field. It MUST be explicitly provided via `evaluatorConfigs[].configuredValues`.
+
+    When the plan includes Guideline Adherence or Factual Accuracy (multi-turn), ALWAYS prompt the
+    user to provide these values before proceeding to creation. If the user cannot provide them,
+    warn that the evaluator will produce unreliable scores.
 
 ## Reference
 
