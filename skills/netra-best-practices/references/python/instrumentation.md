@@ -92,12 +92,16 @@ from netra.decorators import workflow, agent, task, span
 
 @workflow(name="order-fulfillment")
 def fulfill_order(order: dict):
+    Netra.set_root_input(order)
+
     current = Netra.get_current_span()
     if current:
         current.set_attribute("order.id", order.get("id"))
         current.add_event("order.received", {"item_count": len(order.get("items", []))})
 
     result = OrderAgent().orchestrate(order)
+
+    Netra.set_root_output(result)
 
     if current:
         current.add_event("order.completed")
@@ -137,6 +141,8 @@ Python uses context managers — the span is automatically ended when the `with`
 from netra import Netra, SpanType, UsageModel
 
 def chat_with_ai(user_message: str) -> str:
+    Netra.set_root_input(user_message)
+
     with Netra.start_span(
         "chat-completion",
         as_type=SpanType.GENERATION,
@@ -160,6 +166,7 @@ def chat_with_ai(user_message: str) -> str:
                 )
             ])
             span.set_success()
+            Netra.set_root_output(response_text)
             return response_text
         except Exception as exc:
             span.set_error(str(exc))
@@ -177,6 +184,38 @@ Netra.set_tenant_id("tenant-xyz")
 Netra.set_custom_attributes("feature", "chat-v2")
 ```
 
+## Root Input & Output
+
+Use `set_root_input` and `set_root_output` to record the top-level input and output on the **root span** of the current trace. These values appear as the `input` and `output` attributes on the trace in the Netra dashboard, making it easy to see what went in and what came out at a glance.
+
+**Always set root input at the entry point of your workflow and root output before returning the final result.** This should be the default practice for every instrumented application.
+
+```python
+from netra import Netra
+
+Netra.set_root_input({"query": "What is the weather today?"})
+
+# ... run your pipeline / agent / chain ...
+
+Netra.set_root_output("The weather today is sunny with a high of 72°F.")
+```
+
+Both methods accept any serializable value (strings, dicts, lists, etc.). The SDK serializes the value to a string internally.
+
+### Streaming output
+
+When the final output is a stream (e.g., an LLM streaming response), use `set_root_output_stream` instead. It wraps the stream transparently and records the accumulated output on the root span when iteration completes.
+
+```python
+stream = client.chat.completions.create(model="gpt-4o", messages=messages, stream=True)
+stream = Netra.set_root_output_stream(stream)
+
+for chunk in stream:
+    print(chunk)  # output is auto-committed to root span when iteration ends
+```
+
+`set_root_output_stream` supports both sync and async iterables. If no active trace context exists or the value is not iterable, it returns the value unchanged — so it is always safe to reassign.
+
 ## Recommended Rollout Strategy
 
 1. Start with auto-instrumentation for broad, immediate coverage.
@@ -188,8 +227,9 @@ Netra.set_custom_attributes("feature", "chat-v2")
 1. `Netra.init()` is called once at startup.
 2. Initialization happens **before** instrumented library usage.
 3. High-level operations appear as workflow spans.
-4. `Netra.shutdown()` is called on graceful app termination.
-5. All `InstrumentSet` values and `SpanType` values used are verified against the official Netra documentation listed in the **References** section below.
+4. `Netra.set_root_input()` is called at the entry point with the user's input, and `Netra.set_root_output()` (or `Netra.set_root_output_stream()` for streaming) is called with the final result before returning.
+5. `Netra.shutdown()` is called on graceful app termination.
+6. All `InstrumentSet` values and `SpanType` values used are verified against the official Netra documentation listed in the **References** section below.
 
 ## References
 

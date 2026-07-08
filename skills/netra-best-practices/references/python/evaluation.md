@@ -96,25 +96,32 @@ dataset = Dataset(items=fetched.items)
 The `task` is a callable that receives a single dataset item's `input` and returns the output to be evaluated. It can be sync or async.
 
 ```python
+from netra import Netra
 from openai import OpenAI
 
 client = OpenAI()
 
 def my_task(input):
+    Netra.set_root_input(input)
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[{"role": "user", "content": input}],
     )
-    return response.choices[0].message.content
+    output = response.choices[0].message.content
+    Netra.set_root_output(output)
+    return output
 ```
 
 ```python
 async def my_async_task(input):
+    Netra.set_root_input(input)
     response = await async_client.chat.completions.create(
         model="gpt-4o",
         messages=[{"role": "user", "content": input}],
     )
-    return response.choices[0].message.content
+    output = response.choices[0].message.content
+    Netra.set_root_output(output)
+    return output
 ```
 
 Each task invocation is automatically wrapped in a `TestRun.{name}` span, so the call is traced end-to-end without extra instrumentation.
@@ -267,11 +274,14 @@ Netra.init(
 client = OpenAI()
 
 def qa_task(input):
+    Netra.set_root_input(input)
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[{"role": "user", "content": input}],
     )
-    return response.choices[0].message.content
+    output = response.choices[0].message.content
+    Netra.set_root_output(output)
+    return output
 
 class ContainsExpectedEvaluator(BaseEvaluator):
     def evaluate(self, context: EvaluatorContext) -> EvaluatorOutput:
@@ -315,7 +325,8 @@ Netra.shutdown()
 2. `NETRA_API_KEY` and `NETRA_OTLP_ENDPOINT` environment variables are set.
 3. Every `DatasetItem` has a non-empty `input`.
 4. The `task` function accepts a single argument and returns the output.
-5. Custom evaluator `evaluate()` returns `EvaluatorOutput` with `evaluator_name` matching `config.name`.
+5. The `task` function calls `Netra.set_root_input(input)` at the start and `Netra.set_root_output(output)` before returning.
+6. Custom evaluator `evaluate()` returns `EvaluatorOutput` with `evaluator_name` matching `config.name`.
 6. `ScoreType` matches the type of `result` (bool for `BOOLEAN`, number for `NUMERICAL`, string for `CATEGORICAL`).
 7. `Netra.shutdown()` is called on graceful termination.
 

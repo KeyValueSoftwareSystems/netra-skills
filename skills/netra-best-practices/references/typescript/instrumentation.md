@@ -80,13 +80,17 @@ TypeScript decorators require `"experimentalDecorators": true` in `tsconfig.json
 - `@span`: generic/custom span type.
 
 ```typescript
-import { SpanType } from "netra-sdk";
+import { Netra, SpanType } from "netra-sdk";
 import { workflow, agent, task, span } from "netra-sdk/decorators";
 
 @workflow({ name: "order-fulfillment" })
 class OrderWorkflow {
   async run(order: { id: string; items: unknown[] }) {
+    Netra.setRootInput(order);
+
     const result = await new OrderAgent().orchestrate(order);
+
+    Netra.setRootOutput(result);
     return result;
   }
 }
@@ -123,6 +127,8 @@ import { Netra, SpanType } from "netra-sdk";
 import type { UsageModel } from "netra-sdk";
 
 async function chatWithAI(userMessage: string): Promise<string> {
+  Netra.setRootInput(userMessage);
+
   const span = Netra.startSpan("chat-completion", {
     asType: SpanType.GENERATION,
     moduleName: "chat",
@@ -146,6 +152,7 @@ async function chatWithAI(userMessage: string): Promise<string> {
       },
     ]);
     span.setSuccess();
+    Netra.setRootOutput(responseText);
     return responseText;
   } catch (error: any) {
     span.setError(error?.message || "unknown error");
@@ -182,6 +189,24 @@ Netra.setTenantId("tenant-xyz");
 Netra.setCustomAttributes("feature", "chat-v2");
 ```
 
+## Root Input & Output
+
+Use `setRootInput` and `setRootOutput` to record the top-level input and output on the **root span** of the current trace. These values appear as the `input` and `output` attributes on the trace in the Netra dashboard, making it easy to see what went in and what came out at a glance.
+
+**Always set root input at the entry point of your workflow and root output before returning the final result.** This should be the default practice for every instrumented application.
+
+```typescript
+import { Netra } from "netra-sdk";
+
+Netra.setRootInput({ query: "What is the weather today?" });
+
+// ... run your pipeline / agent / chain ...
+
+Netra.setRootOutput("The weather today is sunny with a high of 72°F.");
+```
+
+Both methods accept any serializable value (strings, objects, arrays, etc.). The SDK serializes the value to a string internally.
+
 ## Root Span Wrapper
 
 When `enableRootSpan` is enabled, use `runWithRootSpan()` to execute code within the root span context. Any spans created inside the callback are automatically **parented to the root span**.
@@ -207,8 +232,9 @@ Netra.runWithRootSpan(() => {
 2. Initialization happens **before** instrumented library usage.
 3. `experimentalDecorators: true` is set in `tsconfig.json` if using decorators.
 4. Manual spans always call `span.end()` in a `finally` block.
-5. `await Netra.shutdown()` is called on graceful app termination.
-6. All `NetraInstruments` values and `SpanType` values used are verified against the official Netra documentation listed in the **References** section below.
+5. `Netra.setRootInput()` is called at the entry point with the user's input, and `Netra.setRootOutput()` is called with the final result before returning.
+6. `await Netra.shutdown()` is called on graceful app termination.
+7. All `NetraInstruments` values and `SpanType` values used are verified against the official Netra documentation listed in the **References** section below.
 
 ## References
 
