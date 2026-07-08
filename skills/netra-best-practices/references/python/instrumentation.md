@@ -216,6 +216,29 @@ for chunk in stream:
 
 `set_root_output_stream` supports both sync and async iterables. If no active trace context exists or the value is not iterable, it returns the value unchanged — so it is always safe to reassign.
 
+### Generator / SSE streaming (FastAPI, Starlette, etc.)
+
+`set_root_output_stream` works by wrapping an iterable that yields raw LLM chunks. It does **not** work when the generator yields already-formatted SSE strings (e.g., `"data: ...\n\n"`), because the accumulated text would include the SSE framing.
+
+In this pattern — common in FastAPI `StreamingResponse` generators — **manually accumulate** the content chunks and call `set_root_output` after iteration:
+
+```python
+@workflow(name="chat-stream")
+def generate():
+    Netra.set_root_input(user_message)
+    collected: list[str] = []
+
+    for chunk in agent.run(message, stream=True):
+        if chunk and chunk.content:
+            collected.append(chunk.content)
+            yield f"data: {chunk.content}\n\n"
+
+    Netra.set_root_output("".join(collected))
+    yield "data: [DONE]\n\n"
+```
+
+**Rule of thumb:** Use `set_root_output_stream` when you can wrap the raw LLM iterable before consuming it. Use manual accumulation + `set_root_output` when the generator transforms or formats chunks before yielding (SSE, WebSocket frames, custom protocols).
+
 ## Recommended Rollout Strategy
 
 1. Start with auto-instrumentation for broad, immediate coverage.
@@ -227,7 +250,7 @@ for chunk in stream:
 1. `Netra.init()` is called once at startup.
 2. Initialization happens **before** instrumented library usage.
 3. High-level operations appear as workflow spans.
-4. `Netra.set_root_input()` is called at the entry point with the user's input, and `Netra.set_root_output()` (or `Netra.set_root_output_stream()` for streaming) is called with the final result before returning.
+4. `Netra.set_root_input()` is called at the entry point with the user's input, and `Netra.set_root_output()` (or `Netra.set_root_output_stream()` for streaming) is called with the final result before returning. For SSE/generator streaming, chunks are accumulated and `set_root_output` is called after iteration completes.
 5. `Netra.shutdown()` is called on graceful app termination.
 6. All `InstrumentSet` values and `SpanType` values used are verified against the official Netra documentation listed in the **References** section below.
 

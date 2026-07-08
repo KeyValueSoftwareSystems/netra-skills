@@ -207,6 +207,45 @@ Netra.setRootOutput("The weather today is sunny with a high of 72°F.");
 
 Both methods accept any serializable value (strings, objects, arrays, etc.). The SDK serializes the value to a string internally.
 
+### Generator / SSE streaming (Express, Next.js, Hono, etc.)
+
+In web frameworks, streaming responses are often sent as formatted SSE strings (`"data: ...\n\n"`) or via `res.write()`. Because the output is transformed before being sent, you cannot simply wrap the raw stream — you need to **manually accumulate** the content chunks and call `setRootOutput` after iteration completes.
+
+```typescript
+import { Netra } from "netra-sdk";
+
+app.post("/api/chat/stream", async (req, res) => {
+  const span = Netra.startSpan("chat-stream");
+  Netra.setSessionId(req.body.sessionId);
+  Netra.setRootInput(req.body.message);
+
+  const collected: string[] = [];
+
+  try {
+    const stream = await agent.run(req.body.message, { stream: true });
+
+    for await (const chunk of stream) {
+      if (chunk.content) {
+        collected.push(chunk.content);
+        res.write(`data: ${chunk.content}\n\n`);
+      }
+    }
+
+    Netra.setRootOutput(collected.join(""));
+    res.write("data: [DONE]\n\n");
+    res.end();
+    span.setSuccess();
+  } catch (error: any) {
+    span.setError(error?.message || "unknown error");
+    res.end();
+  } finally {
+    span.end();
+  }
+});
+```
+
+**Rule of thumb:** Use manual accumulation + `setRootOutput` when the handler transforms or formats chunks before sending (SSE, WebSocket frames, custom protocols). This ensures the root span captures the clean response content without framing artifacts.
+
 ## Root Span Wrapper
 
 When `enableRootSpan` is enabled, use `runWithRootSpan()` to execute code within the root span context. Any spans created inside the callback are automatically **parented to the root span**.
@@ -232,7 +271,7 @@ Netra.runWithRootSpan(() => {
 2. Initialization happens **before** instrumented library usage.
 3. `experimentalDecorators: true` is set in `tsconfig.json` if using decorators.
 4. Manual spans always call `span.end()` in a `finally` block.
-5. `Netra.setRootInput()` is called at the entry point with the user's input, and `Netra.setRootOutput()` is called with the final result before returning.
+5. `Netra.setRootInput()` is called at the entry point with the user's input, and `Netra.setRootOutput()` is called with the final result before returning. For SSE/generator streaming, chunks are accumulated and `setRootOutput` is called after iteration completes.
 6. `await Netra.shutdown()` is called on graceful app termination.
 7. All `NetraInstruments` values and `SpanType` values used are verified against the official Netra documentation listed in the **References** section below.
 
