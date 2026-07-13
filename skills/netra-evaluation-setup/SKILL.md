@@ -325,11 +325,15 @@ class MyAgentTask(BaseTask):
         message: str,
         session_id: str | None = None,
         files: list[ProcessedFile] | None = None,
+        setup_context: dict | None = None,  # populated by before_all / before hooks
     ) -> TaskResult:
+        ctx = setup_context or {}
         response = self.agent.chat(
             message,
             session_id=session_id,
             files=files,
+            # Pass any setup data from hooks (e.g. auth token, customer ID)
+            auth_token=ctx.get("auth_token"),
         )
 
         return TaskResult(
@@ -338,7 +342,7 @@ class MyAgentTask(BaseTask):
         )
 ```
 
-Execution example:
+Execution example (without hooks):
 
 ```python
 result = Netra.simulation.run_simulation(
@@ -350,12 +354,26 @@ result = Netra.simulation.run_simulation(
 )
 ```
 
+Execution example (with hooks — generated in Phase 3g when correlations are detected):
+
+```python
+result = Netra.simulation.run_simulation(
+    name="Customer Support Simulation",
+    dataset_id="dataset-123",
+    task=MyAgentTask(my_agent),
+    context={"environment": "staging"},
+    max_concurrency=5,
+    hooks=hooks,  # SimulationHooks instance from Phase 3g
+)
+```
+
 This ensures:
 
 - Conversation state is maintained
 - Session IDs are tracked
 - Simulation traces are generated
 - Evaluators can access conversation history and span outputs
+- Correlated scenarios can share state safely without sequential ordering
 
 #### Turn Type Detection Rules
 
@@ -373,6 +391,185 @@ Determine execution mode from the specification:
 | Roleplay simulation | multi |
 
 If uncertain, ask the user before generating the plan.
+
+### Phase 3g: Identify Scenario Correlations and Propose Hooks
+
+**Apply this phase only for multi-turn datasets.**
+
+Dataset items often contain scenarios that are correlated — they share state or make assumptions about prior scenarios having run. Because Netra executes scenarios in parallel (configurable concurrency), sequential ordering cannot be guaranteed. Hooks solve this by letting users run setup/teardown code before and after scenarios without merging items or relying on ordering.
+
+#### Step 1: Detect Scenario Correlations
+
+Read every scenario in the plan and flag correlations in these categories:
+
+| Pattern | Description | Hook required |
+|---------|-------------|---------------|
+| **Shared resource** | Scenario B operates on an entity created by Scenario A (employee, account, record) | `before_all` to create the entity once |
+| **Authentication state** | Scenarios need a logged-in session or token | `before_all` or `before` to obtain credentials |
+| **Data seeding** | All scenarios require the same seed data (catalog, config, reference records) | `before_all` to populate |
+| **External service state** | Scenarios require a third-party service to be in a specific state | `before_all` / `after_all` to set up and reset |
+| **Isolation needed** | Each scenario must start with a clean slate (independent user, fresh cart) | `before` to reset per scenario |
+| **Cleanup required** | Resources created during a scenario must be deleted afterwards | `after` or `after_all` |
+
+If no correlations are found, hooks are not required. State this explicitly in the plan.
+
+#### Step 2: Design the Hook Strategy
+
+For each detected correlation pattern, decide which hook level to use:
+
+| Situation | Recommended hook | Rationale |
+|-----------|-----------------|-----------|
+| Create a resource used by ALL scenarios | `before_all` | Run once; cheaper than per-scenario creation |
+| Set up per-scenario isolation (fresh session, unique user) | `before` | Each scenario gets its own clean state |
+| Tear down per-scenario resources | `after` | Clean up immediately; don't wait for run to end |
+| Delete shared resources created in `before_all` | `after_all` | Run once after all scenarios finish |
+
+**Failure semantics to communicate to the user:**
+- If `before_all` fails → the entire run is marked failed; no scenarios execute
+- If `before` fails for a scenario → that scenario is marked `prescript_failed`; other scenarios continue running
+- `after` / `after_all` failures are logged as warnings; they do not affect scenario or run status
+
+#### Step 3: Generate Hook Scaffold Code
+
+For each hook identified, generate a Python scaffold with:
+- The function signature matching the required hook level
+- Docstring explaining what the hook does
+- Placeholder for the actual implementation (marked with `# TODO`)
+- The `SimulationHooks(...)` call wiring the hooks together
+- The updated `run_simulation(...)` call passing `hooks=`
+
+**Hook function signatures:**
+
+```python
+# before_all: no args → returns dict (shared context) or None
+def before_all() -> dict | None:
+    ...
+
+# before: receives run_item_id and shared_context → returns dict (item context) or None
+def before(run_item_id: str, shared_context: dict | None) -> dict | None:
+    ...
+
+# after: receives run_item_id, result dict, and shared_context → returns None
+def after(run_item_id: str, result: dict, shared_context: dict | None) -> None:
+    ...
+
+# after_all: receives aggregated results dict and shared_context → returns None
+def after_all(results: dict, shared_context: dict | None) -> None:
+    ...
+```
+
+All hooks can be async (`async def`) if the user's setup code is async.
+
+**Context passing pattern:**
+
+```
+before_all()                              → shared_context (dict | None)
+before(run_item_id, shared_context)       → merged into setup_context passed to BaseTask.run()
+BaseTask.run(..., setup_context=...)      ← receives merged context
+after(run_item_id, result, shared_context)
+after_all(results, shared_context)
+```
+
+The `setup_context` dict that reaches `BaseTask.run()` is the result of `shared_context` (from `before_all`) merged with any dict returned by `before`. The task can use it to access pre-created IDs, tokens, or any setup data.
+
+**Full scaffold example (employee + role assignment pattern):**
+
+```python
+from netra.simulation import BaseTask, SimulationHooks, TaskResult
+
+# ---- Hooks ----
+
+def before_all():
+    """Create the test employee and assign the admin role before any scenario runs."""
+    # TODO: replace with your actual setup code
+    employee = your_api.create_employee(name="Test User", role="admin")
+    return {"employee_id": employee.id}
+
+
+def before(run_item_id: str, shared_context: dict | None):
+    """Obtain a fresh auth token for each scenario."""
+    employee_id = (shared_context or {}).get("employee_id")
+    # TODO: replace with your actual login logic
+    token = your_api.login(employee_id=employee_id)
+    return {"auth_token": token}
+
+
+def after(run_item_id: str, result: dict, shared_context: dict | None):
+    """Log out after each scenario regardless of outcome."""
+    token = (shared_context or {}).get("auth_token")
+    try:
+        your_api.logout(token=token)
+    except Exception:
+        pass  # after failures are logged but do not affect scenario status
+
+
+def after_all(results: dict, shared_context: dict | None):
+    """Delete the test employee once all scenarios have finished."""
+    employee_id = (shared_context or {}).get("employee_id")
+    # TODO: replace with your actual teardown code
+    your_api.delete_employee(employee_id=employee_id)
+
+
+hooks = SimulationHooks(
+    before_all=before_all,
+    before=before,
+    after=after,
+    after_all=after_all,
+)
+
+
+# ---- Task ----
+
+class MyAgentTask(BaseTask):
+    def run(
+        self,
+        message: str,
+        session_id: str | None = None,
+        files: list | None = None,
+        setup_context: dict | None = None,
+    ) -> TaskResult:
+        ctx = setup_context or {}
+        response = my_agent.chat(
+            message,
+            session_id=session_id,
+            auth_token=ctx.get("auth_token"),
+        )
+        return TaskResult(
+            message=response.text,
+            session_id=session_id or response.session_id or "default",
+        )
+
+
+# ---- Run ----
+
+result = Netra.simulation.run_simulation(
+    name="My Simulation",
+    dataset_id="dataset-123",
+    task=MyAgentTask(),
+    hooks=hooks,
+    max_concurrency=3,
+)
+```
+
+#### Step 4: Flag Hook Requirement in the Plan
+
+In the plan, add a "Hooks" section under the Dataset Configuration table when hooks are needed. When no hooks are needed, state explicitly:
+
+```
+**Hooks:** Not required — scenarios are independent.
+```
+
+When hooks are needed, list each hook type with a one-line description:
+
+```
+**Hooks:**
+- `before_all`: Create shared test employee and assign admin role
+- `before`: Obtain per-scenario auth token via login
+- `after`: Log out after each scenario
+- `after_all`: Delete the test employee
+```
+
+Then include the generated scaffold code in a collapsible code block under the plan summary.
 
 ### Phase 4: Generate the Plan
 
@@ -408,6 +605,23 @@ If Turn Type = `multi`, include:
 ```text
 Required Task Implementation:
 ⚠️ User must provide a BaseTask implementation compatible with Netra Simulation.
+```
+
+If Turn Type = `multi` and hooks were identified in Phase 3g, include a **Hooks** section immediately after Execution Strategy:
+
+```text
+### Hooks (Pre/Post Scripts)
+
+{Either "Not required — scenarios are independent." OR a list like:}
+
+- `before_all`: {one-line description}
+- `before`: {one-line description}
+- `after`: {one-line description}
+- `after_all`: {one-line description}
+
+**Generated scaffold code** (requires user to fill in TODO sections):
+
+{paste the full scaffold code block from Phase 3g here}
 ```
 ---
 
@@ -517,6 +731,7 @@ After outputting the plan, ask the user:
 > - Adjust variable mappings (where input/output/reference comes from)
 > - Change pass criteria or model
 > - Edit the dataset name or description
+> - Add, remove, or change hooks (before_all, before, after, after_all)
 >
 > When you're satisfied, say **"proceed"** and I'll create everything in Netra.
 
@@ -1011,6 +1226,27 @@ Bad:
     When the plan includes Guideline Adherence or Factual Accuracy (multi-turn), ALWAYS prompt the
     user to provide these values before proceeding to creation. If the user cannot provide them,
     warn that the evaluator will produce unreliable scores.
+
+32. **Always run Phase 3g for multi-turn datasets.** Skipping the correlation analysis risks generating a plan that will produce incorrect results because parallel scenario execution collides on shared state (e.g., two scenarios trying to use the same record simultaneously).
+
+33. **Hooks live entirely on the user's side.** Scripts are never uploaded to or stored by Netra. Only lightweight metadata (hook name, docstring summary) is sent to the backend at run creation and displayed in the Netra UI as badges ("Has pre-script", "Has teardown"). The generated scaffold code belongs in the user's codebase, not in the Netra dataset configuration.
+
+34. **Never collapse correlated scenarios into a single large item to avoid hooks.** Merging related scenarios degrades evaluator accuracy (session evaluators score the entire conversation — a merged scenario is harder to judge) and makes the dataset harder to maintain. Recommend hooks instead.
+
+35. **Never suggest sequential execution as a workaround for correlation.** Sequential execution (max_concurrency=1) prevents collisions but means a single scenario failure blocks all subsequent ones. Hooks are the correct solution.
+
+36. **`before_all` failure is fatal for the entire run.** If the setup code raises, no scenarios run and the run is marked failed. Only put truly required global setup in `before_all`. Optional or per-scenario setup belongs in `before`.
+
+37. **`after` and `after_all` must be robust.** These hooks run even when scenarios fail. Wrap risky cleanup logic in try/except so a teardown error does not obscure the actual scenario failure reason.
+
+38. **`setup_context` is how hooks share data with BaseTask.run().** The dict returned by `before_all` and `before` is merged and passed as `setup_context` to every call of `BaseTask.run()` for that scenario. The task must declare `setup_context: Optional[dict] = None` in its `run()` signature to receive it. Existing tasks that do not declare it continue to work (backwards compatible).
+
+39. **Always include a `hooks` usage example in the generated scaffold code** when hooks are recommended. The example must show:
+    - The `SimulationHooks(...)` instantiation with all recommended hooks wired
+    - A `BaseTask.run()` that accepts and uses `setup_context`
+    - The `Netra.simulation.run_simulation(..., hooks=hooks)` call
+
+40. **Clearly communicate the `prescript_failed` status to the user.** When a `before` hook fails for a specific scenario, the test run item's status is set to `prescript_failed` rather than `failed`. This is visible in the Netra dashboard and distinguishes hook setup failures from actual agent failures.
 
 ## Reference
 
