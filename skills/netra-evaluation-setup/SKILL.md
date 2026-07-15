@@ -420,14 +420,48 @@ For each detected correlation pattern, decide which hook level to use:
 | Situation | Recommended hook | Rationale |
 |-----------|-----------------|-----------|
 | Create a resource used by ALL scenarios | `before_all` | Run once; cheaper than per-scenario creation |
-| Set up per-scenario isolation (fresh session, unique user) | `before` | Each scenario gets its own clean state |
-| Tear down per-scenario resources | `after` | Clean up immediately; don't wait for run to end |
+| Set up per-scenario isolation (fresh session, unique user) | `before[dataset_item_id]` | Each scenario gets its own clean state |
+| Tear down per-scenario resources | `after[dataset_item_id]` | Clean up immediately; don't wait for run to end |
 | Delete shared resources created in `before_all` | `after_all` | Run once after all scenarios finish |
 
 **Failure semantics to communicate to the user:**
 - If `before_all` fails → the entire run is marked failed; no scenarios execute
-- If `before` fails for a scenario → that scenario is marked `prescript_failed`; other scenarios continue running
+- If `before[dataset_item_id]` fails for a scenario → that scenario is marked `prescript_failed`; other scenarios continue running
 - `after` / `after_all` failures are logged as warnings; they do not affect scenario or run status
+
+**Terminal-state behaviour of `prescript_failed`:**
+- `prescript_failed` is a **terminal status** — an item that reached it is complete. The SDK's polling loop correctly counts `prescript_failed` items as terminal and will not wait indefinitely for them.
+- A `prescript_failed` item also has its `evalStatus` immediately set to `NOT_AVAILABLE` — evaluators are never queued for an item whose agent never ran.
+- If **all** items end in either `failed` or `prescript_failed` (with no successfully completed items), the run's overall evaluation status resolves to `NOT_AVAILABLE`.
+- A `prescript_failed` item's status is stable — it will never be overwritten by a subsequent bulk-failure sweep (e.g. on run timeout).
+
+**How to determine dataset_item_id for hook mapping:**
+
+When generating the plan, you will create dataset items with specific IDs. These IDs are returned by the `netra_create_dataset_item` MCP call. After all items are created, instruct the user to:
+
+1. Map the returned `dataset_item_id` values to the corresponding scenarios
+2. Use these IDs as keys in the `SimulationHooks.before` and `SimulationHooks.after` dictionaries
+
+Example workflow:
+```python
+# Step 1: Create dataset items and capture their IDs
+refund_item = netra_create_dataset_item(...)  # returns {"id": "item-abc-123", ...}
+balance_item = netra_create_dataset_item(...)  # returns {"id": "item-xyz-789", ...}
+
+# Step 2: Map hooks using the actual dataset_item_id values
+hooks = SimulationHooks(
+    before_all=before_all,
+    before={
+        "item-abc-123": setup_refund_scenario,  # Use actual ID from step 1
+        "item-xyz-789": setup_balance_scenario,
+    },
+    after={
+        "item-abc-123": teardown_refund_scenario,
+        "item-xyz-789": teardown_balance_scenario,
+    },
+    after_all=after_all,
+)
+```
 
 #### Step 3: Generate Hook Scaffold Code
 
@@ -445,15 +479,18 @@ For each hook identified, generate a Python scaffold with:
 def before_all() -> dict | None:
     ...
 
-# before: receives run_item_id and shared_context → returns dict (item context) or None
-def before(run_item_id: str, shared_context: dict | None) -> dict | None:
+# before: dict keyed by dataset_item_id; each receives shared_context → returns dict (item context) or None
+def setup_scenario_a(shared_context: dict | None) -> dict | None:
     ...
 
-# after: receives run_item_id, result dict, and shared_context → returns None
-def after(run_item_id: str, result: dict, shared_context: dict | None) -> None:
+def setup_scenario_b(shared_context: dict | None) -> dict | None:
     ...
 
-# after_all: receives aggregated results dict and shared_context → returns None
+# after: dict keyed by dataset_item_id; each receives result + setup_context (merged before_all + before)
+def teardown_scenario_a(result: dict, setup_context: dict | None) -> None:
+    ...
+
+# after_all: receives aggregated results dict and shared_context (before_all only) → returns None
 def after_all(results: dict, shared_context: dict | None) -> None:
     ...
 ```
@@ -463,16 +500,22 @@ All hooks can be async (`async def`) if the user's setup code is async.
 **Context passing pattern:**
 
 ```
-before_all()                              → shared_context (dict | None)
-before(run_item_id, shared_context)       → merged into setup_context passed to BaseTask.run()
-BaseTask.run(..., setup_context=...)      ← receives merged context
-after(run_item_id, result, shared_context)
-after_all(results, shared_context)
+before_all()                                      → shared_context (dict | None)
+hooks.before[dataset_item_id](shared_context)     → merged into setup_context
+BaseTask.run(..., setup_context=...)              ← receives merged context
+hooks.after[dataset_item_id](result, setup_context)  ← same merged context for cleanup
+after_all(results, shared_context)                ← run-level shared_context only
 ```
 
-The `setup_context` dict that reaches `BaseTask.run()` is the result of `shared_context` (from `before_all`) merged with any dict returned by `before`. The task can use it to access pre-created IDs, tokens, or any setup data.
+**Important:** The `before` and `after` hooks are dictionaries keyed by `dataset_item_id`, not single functions. Each scenario that requires specific setup/teardown gets its own function, and these functions are registered in the `SimulationHooks` using the stable dataset item ID as the key.
 
-**Full scaffold example (employee + role assignment pattern):**
+The `setup_context` dict is the merge of `shared_context` (from `before_all`) with any dict returned by the item `before` hook. It is passed to both `BaseTask.run()` and the item `after` hook so teardown can clean up per-scenario resources (tokens, accounts, etc.). `after_all` still receives only the run-level `shared_context`.
+
+**Full scaffold example (employee + per-scenario auth pattern):**
+
+Assume dataset has two items:
+- `dataset_item_id = "item-refund-request"` → scenario requiring auth
+- `dataset_item_id = "item-balance-inquiry"` → scenario requiring auth
 
 ```python
 from netra.simulation import BaseTask, SimulationHooks, TaskResult
@@ -486,21 +529,37 @@ def before_all():
     return {"employee_id": employee.id}
 
 
-def before(run_item_id: str, shared_context: dict | None):
-    """Obtain a fresh auth token for each scenario."""
+def setup_refund_scenario(shared_context: dict | None):
+    """Obtain a fresh auth token for refund scenario."""
     employee_id = (shared_context or {}).get("employee_id")
     # TODO: replace with your actual login logic
     token = your_api.login(employee_id=employee_id)
     return {"auth_token": token}
 
 
-def after(run_item_id: str, result: dict, shared_context: dict | None):
-    """Log out after each scenario regardless of outcome."""
-    token = (shared_context or {}).get("auth_token")
+def setup_balance_scenario(shared_context: dict | None):
+    """Obtain a fresh auth token for balance inquiry scenario."""
+    employee_id = (shared_context or {}).get("employee_id")
+    token = your_api.login(employee_id=employee_id)
+    return {"auth_token": token}
+
+
+def teardown_refund_scenario(result: dict, setup_context: dict | None):
+    """Log out after refund scenario regardless of outcome."""
+    auth_token = (setup_context or {}).get("auth_token")  # from merged before_all + before
     try:
-        your_api.logout(token=token)
+        your_api.logout(token=auth_token)
     except Exception:
         pass  # after failures are logged but do not affect scenario status
+
+
+def teardown_balance_scenario(result: dict, setup_context: dict | None):
+    """Log out after balance inquiry scenario."""
+    auth_token = (setup_context or {}).get("auth_token")
+    try:
+        your_api.logout(token=auth_token)
+    except Exception:
+        pass
 
 
 def after_all(results: dict, shared_context: dict | None):
@@ -510,10 +569,17 @@ def after_all(results: dict, shared_context: dict | None):
     your_api.delete_employee(employee_id=employee_id)
 
 
+# Map hooks to specific dataset item IDs
 hooks = SimulationHooks(
     before_all=before_all,
-    before=before,
-    after=after,
+    before={
+        "item-refund-request": setup_refund_scenario,
+        "item-balance-inquiry": setup_balance_scenario,
+    },
+    after={
+        "item-refund-request": teardown_refund_scenario,
+        "item-balance-inquiry": teardown_balance_scenario,
+    },
     after_all=after_all,
 )
 
@@ -559,15 +625,25 @@ In the plan, add a "Hooks" section under the Dataset Configuration table when ho
 **Hooks:** Not required — scenarios are independent.
 ```
 
-When hooks are needed, list each hook type with a one-line description:
+When hooks are needed, list each hook type with a one-line description and specify which scenarios require item-specific hooks:
 
 ```
 **Hooks:**
 - `before_all`: Create shared test employee and assign admin role
-- `before`: Obtain per-scenario auth token via login
-- `after`: Log out after each scenario
+- `before`: Per-scenario hooks keyed by dataset_item_id:
+  - Refund Request scenario: Obtain auth token via login
+  - Balance Inquiry scenario: Obtain auth token via login
+- `after`: Per-scenario hooks keyed by dataset_item_id:
+  - Refund Request scenario: Log out after scenario
+  - Balance Inquiry scenario: Log out after scenario
 - `after_all`: Delete the test employee
 ```
+
+In the Netra UI Conversation tab for a scenario:
+- `before_all` / `after_all` appear for every scenario in that run (run-level metadata)
+- `before` / `after` appear only when that scenario's `dataset_item_id` was registered in the hooks dict (item-level metadata)
+
+**Important:** The actual `dataset_item_id` values will only be available after creating the dataset items via MCP. In the generated scaffold code, use placeholder IDs (e.g., `"item-refund-request"`, `"item-balance-inquiry"`) and instruct the user to replace these with the actual IDs returned by `netra_create_dataset_item`.
 
 Then include the generated scaffold code in a collapsible code block under the plan summary.
 
@@ -1229,7 +1305,10 @@ Bad:
 
 32. **Always run Phase 3g for multi-turn datasets.** Skipping the correlation analysis risks generating a plan that will produce incorrect results because parallel scenario execution collides on shared state (e.g., two scenarios trying to use the same record simultaneously).
 
-33. **Hooks live entirely on the user's side.** Scripts are never uploaded to or stored by Netra. Only lightweight metadata (hook name, docstring summary) is sent to the backend at run creation and displayed in the Netra UI as badges ("Has pre-script", "Has teardown"). The generated scaffold code belongs in the user's codebase, not in the Netra dataset configuration.
+33. **Hooks live entirely on the user's side.** Scripts are never uploaded to or stored by Netra. At run creation the SDK sends lightweight descriptors (`lifecycleHooks`) only:
+    - `beforeAll` / `afterAll` → stored on the test run (shown on every scenario in that run)
+    - `before` / `after` per `datasetItemId` → stored on each matching test run item (shown only on that scenario's Conversation tab)
+    The generated scaffold code belongs in the user's codebase, not in the Netra dataset configuration. Always key `SimulationHooks.before` / `after` by real `dataset_item_id` values so the correct scenario UI shows the correct pre/post script.
 
 34. **Never collapse correlated scenarios into a single large item to avoid hooks.** Merging related scenarios degrades evaluator accuracy (session evaluators score the entire conversation — a merged scenario is harder to judge) and makes the dataset harder to maintain. Recommend hooks instead.
 
@@ -1239,14 +1318,19 @@ Bad:
 
 37. **`after` and `after_all` must be robust.** These hooks run even when scenarios fail. Wrap risky cleanup logic in try/except so a teardown error does not obscure the actual scenario failure reason.
 
-38. **`setup_context` is how hooks share data with BaseTask.run().** The dict returned by `before_all` and `before` is merged and passed as `setup_context` to every call of `BaseTask.run()` for that scenario. The task must declare `setup_context: Optional[dict] = None` in its `run()` signature to receive it. Existing tasks that do not declare it continue to work (backwards compatible).
+38. **`setup_context` is how hooks share data with BaseTask.run() and item `after` hooks.** The dict returned by `before_all` and `before` is merged and passed as `setup_context` to every call of `BaseTask.run()` for that scenario, and again to the item `after` hook for cleanup. Generated scaffolding must use `after(result, setup_context)` — not `shared_context` — so teardown can access item-level keys (tokens, accounts). The task must declare `setup_context: Optional[dict] = None` in its `run()` signature to receive it. Existing tasks that do not declare it continue to work (backwards compatible). `after_all` still receives only the run-level `shared_context` from `before_all`.
 
 39. **Always include a `hooks` usage example in the generated scaffold code** when hooks are recommended. The example must show:
     - The `SimulationHooks(...)` instantiation with all recommended hooks wired
     - A `BaseTask.run()` that accepts and uses `setup_context`
     - The `Netra.simulation.run_simulation(..., hooks=hooks)` call
 
-40. **Clearly communicate the `prescript_failed` status to the user.** When a `before` hook fails for a specific scenario, the test run item's status is set to `prescript_failed` rather than `failed`. This is visible in the Netra dashboard and distinguishes hook setup failures from actual agent failures.
+40. **Clearly communicate the `prescript_failed` status to the user.** When a `before` hook fails for a specific scenario, the test run item's status is set to `prescript_failed` rather than `failed`. Key properties of this status:
+    - Visible in the Netra dashboard — distinguishes setup failures from actual agent failures
+    - **Terminal**: the SDK polling loop treats `prescript_failed` as done; the run will not hang waiting for the item
+    - **Eval suppressed**: `evalStatus` is set to `NOT_AVAILABLE` immediately — no evaluators run for that item
+    - **Stable**: a `prescript_failed` item's status cannot be overwritten by bulk-failure sweeps (e.g. on run timeout)
+    - **Evaluation roll-up**: if every item in the run ends as `failed` or `prescript_failed`, the run's evaluation status is `NOT_AVAILABLE`
 
 ## Reference
 

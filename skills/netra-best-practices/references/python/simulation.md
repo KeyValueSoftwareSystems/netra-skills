@@ -146,8 +146,8 @@ Hooks are defined on the **SDK side** — the actual scripts never leave your en
 | Hook | When it runs | Failure effect |
 |------|-------------|----------------|
 | `before_all` | Once, before any scenario starts | Entire run is marked failed; no scenarios execute |
-| `before` | Before each individual scenario | That scenario is marked `prescript_failed`; others continue |
-| `after` | After each individual scenario (success or failure) | Logged as warning; does not affect scenario status |
+| `before` | Before specific scenarios only (keyed by `dataset_item_id`) | That scenario is marked `prescript_failed` (terminal; eval suppressed); others continue |
+| `after` | After specific scenarios only (keyed by `dataset_item_id`) | Logged as warning; does not affect scenario status |
 | `after_all` | Once, after all scenarios complete | Logged as warning; does not affect run status |
 
 ### Context passing
@@ -155,12 +155,14 @@ Hooks are defined on the **SDK side** — the actual scripts never leave your en
 Hooks pass data to each other and to your `BaseTask` via a context dict:
 
 ```
-before_all()            → shared_context (dict)
-before(id, shared_ctx)  → item_context merged into shared_context
+before_all()                            → shared_context (dict)
+before[dataset_item_id](shared_context) → item_context merged into setup_context (if registered)
 BaseTask.run(..., setup_context=merged_context)
-after(id, result, shared_context)
+after[dataset_item_id](result, setup_context) (if registered)
 after_all(results, shared_context)
 ```
+
+`setup_context` is the merge of `before_all` + item `before`. Both `BaseTask.run` and item `after` hooks receive it so teardown can clean up per-scenario resources (tokens, accounts, etc.). `after_all` still receives only the run-level `shared_context` from `before_all`.
 
 ### SimulationHooks
 
@@ -171,15 +173,21 @@ from netra.simulation import SimulationHooks
 ```python
 @dataclass
 class SimulationHooks:
-    before_all: Optional[Callable] = None   # () -> dict | None
-    before:     Optional[Callable] = None   # (run_item_id, shared_context) -> dict | None
-    after:      Optional[Callable] = None   # (run_item_id, result, shared_context) -> None
-    after_all:  Optional[Callable] = None   # (results, shared_context) -> None
+    before_all: Optional[Callable] = None                # () -> dict | None
+    before:     Optional[dict[str, Callable]] = None     # Dict[dataset_item_id, (shared_context) -> dict | None]
+    after:      Optional[dict[str, Callable]] = None     # Dict[dataset_item_id, (result, setup_context) -> None]
+    after_all:  Optional[Callable] = None                # (results, shared_context) -> None
 ```
+
+**Important changes:**
+- `before` and `after` are now **dicts** keyed by `dataset_item_id`
+- Only items with registered hooks will have their specific setup/teardown functions called
+- `before` functions receive only `shared_context` (no `dataset_item_id` parameter needed)
+- `after` functions receive `result` and `setup_context` (merged `before_all` + item `before`)
 
 All hooks can be sync or async.
 
-### Example — correlated scenarios with shared state
+### Example — Item-specific setup for particular scenarios
 
 ```python
 from netra.simulation import BaseTask, SimulationHooks, TaskResult
@@ -187,32 +195,55 @@ from netra.simulation import BaseTask, SimulationHooks, TaskResult
 # ---- Hooks ----
 
 def setup_environment():
-    """Create a test employee and assign the admin role before any scenario runs."""
-    employee = api.create_employee(name="Test User", department="Engineering")
-    api.assign_role(employee.id, "admin")
-    return {"employee_id": employee.id}
+    """Create a test user before any scenario runs."""
+    user = api.create_user(name="Test User", department="Engineering")
+    return {"user_id": user.id}
 
 
-def setup_scenario(run_item_id, shared_context):
-    """Log in as the test employee before each scenario."""
-    token = api.login(employee_id=shared_context["employee_id"])
-    return {"auth_token": token}
+def setup_refund_scenario(shared_context):
+    """Setup specific to refund scenarios - creates refund account and token."""
+    token = api.login(user_id=shared_context["user_id"])
+    refund_account = api.create_refund_account()
+    return {"auth_token": token, "refund_account_id": refund_account.id}
 
 
-def teardown_scenario(run_item_id, result, shared_context):
-    """Log out after each scenario regardless of outcome."""
-    api.logout(token=shared_context.get("auth_token"))
+def setup_premium_scenario(shared_context):
+    """Setup specific to premium user scenarios."""
+    token = api.login(user_id=shared_context["user_id"])
+    api.upgrade_to_premium(shared_context["user_id"])
+    return {"auth_token": token, "is_premium": True}
+
+
+def teardown_refund_scenario(result, setup_context):
+    """Cleanup refund-specific resources using item setup context."""
+    api.logout(token=setup_context.get("auth_token"))
+    api.delete_refund_account(setup_context.get("refund_account_id"))
+
+
+def teardown_premium_scenario(result, setup_context):
+    """Cleanup premium-specific resources using item setup context."""
+    api.logout(token=setup_context.get("auth_token"))
+    api.downgrade_from_premium(setup_context["user_id"])
 
 
 def teardown_environment(results, shared_context):
-    """Delete the test employee once all scenarios are done."""
-    api.delete_employee(employee_id=shared_context["employee_id"])
+    """Delete the test user once all scenarios are done."""
+    api.delete_user(user_id=shared_context["user_id"])
 
 
+# Note: dataset_item_id values come from your dataset items in the Netra dashboard
 hooks = SimulationHooks(
     before_all=setup_environment,
-    before=setup_scenario,
-    after=teardown_scenario,
+    before={
+        "refund-scenario-001": setup_refund_scenario,
+        "refund-scenario-002": setup_refund_scenario,
+        "premium-user-001": setup_premium_scenario,
+    },
+    after={
+        "refund-scenario-001": teardown_refund_scenario,
+        "refund-scenario-002": teardown_refund_scenario,
+        "premium-user-001": teardown_premium_scenario,
+    },
     after_all=teardown_environment,
 )
 
@@ -226,6 +257,7 @@ class MyAgentTask(BaseTask):
             message,
             session_id=session_id,
             auth_token=ctx.get("auth_token"),
+            is_premium=ctx.get("is_premium", False),
         )
         return TaskResult(
             message=response.text,
@@ -236,11 +268,11 @@ class MyAgentTask(BaseTask):
 # ---- Run ----
 
 result = Netra.simulation.run_simulation(
-    name="Employee Workflow Simulation",
+    name="Multi-Scenario Workflow Test",
     dataset_id="your-dataset-id",
     task=MyAgentTask(),
     hooks=hooks,
-    max_concurrency=3,  # scenarios run in parallel, each getting its own auth_token
+    max_concurrency=3,
 )
 ```
 
@@ -248,16 +280,16 @@ result = Netra.simulation.run_simulation(
 
 ```python
 async def setup_environment():
-    employee = await async_api.create_employee(name="Test User")
-    return {"employee_id": employee.id}
+    user = await async_api.create_user(name="Test User")
+    return {"user_id": user.id}
 
-async def setup_scenario(run_item_id, shared_context):
-    token = await async_api.login(shared_context["employee_id"])
+async def setup_refund_scenario(shared_context):
+    token = await async_api.login(shared_context["user_id"])
     return {"auth_token": token}
 
 hooks = SimulationHooks(
     before_all=setup_environment,
-    before=setup_scenario,
+    before={"refund-scenario-001": setup_refund_scenario},
 )
 ```
 
@@ -273,7 +305,7 @@ All hooks are optional. Omit any you don't need.
 
 ### Netra UI display
 
-When `hooks` are passed, the Netra dashboard shows which hook types are configured on the test run (e.g. "Has pre-script" badge). The actual script code is never stored by Netra.
+When `hooks` are passed, lightweight descriptors (function name and docstring) are sent to the backend as `lifecycleHooks` and the Netra dashboard shows which hook types are configured on the test run (e.g. "Has pre-script" badge). The actual script code is never stored by Netra.
 
 ---
 
@@ -283,8 +315,12 @@ When `hooks` are passed, the Netra dashboard shows which hook types are configur
 2. `NETRA_API_KEY` and `NETRA_OTLP_ENDPOINT` are set.
 3. Task's `run()` always returns a `TaskResult` with both `message` and `session_id`.
 4. `Netra.shutdown()` is called on graceful termination.
-5. When using hooks: `before_all` and `before` return a `dict` or `None` (other types are ignored).
-6. When using hooks: `after` and `after_all` should not raise — wrap risky cleanup in try/except.
+5. When using hooks: `before_all` returns a `dict` or `None` (other types are ignored).
+6. When using hooks: `before` dict values (functions) receive only `shared_context` and return `dict` or `None`.
+7. When using hooks: `after` dict values (functions) receive `result` and `setup_context` (merged `before_all` + item `before`); return value is ignored. `after` also runs when the scenario fails or exceeds max turns.
+8. When using hooks: `after_all` should not raise — wrap risky cleanup in try/except.
+9. Hook dict keys must match `dataset_item_id` values from your dataset.
+10. A `prescript_failed` scenario is **terminal** — the SDK polling loop will not wait for it. Its `evalStatus` is set to `NOT_AVAILABLE` automatically and it cannot be overwritten by a timeout sweep. If all scenarios end as `failed` or `prescript_failed`, the run's evaluation status resolves to `NOT_AVAILABLE`.
 
 ## References
 
