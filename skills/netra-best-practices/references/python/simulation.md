@@ -1,6 +1,6 @@
 ---
 name: netra-python-simulation
-description: Run multi-turn conversation simulations with the Python Netra SDK. Covers BaseTask, run_simulation, and file handling.
+description: Run multi-turn conversation simulations with the Python Netra SDK. Covers BaseTask, run_simulation, SimulationHooks, and file handling.
 ---
 
 # Python Simulation
@@ -42,7 +42,7 @@ Subclass `BaseTask` and implement `run()`. The method can be sync or async.
 from netra.simulation import BaseTask, TaskResult
 
 class MyAgentTask(BaseTask):
-    def run(self, message, session_id=None, files=None):
+    def run(self, message, session_id=None, files=None, setup_context=None):
         response = my_agent.chat(message, session_id=session_id)
         return TaskResult(
             message=response.text,
@@ -58,12 +58,18 @@ def run(
     message: str,
     session_id: Optional[str] = None,
     files: Optional[list[ProcessedFile]] = None,
+    setup_context: Optional[dict] = None,
 ) -> TaskResult | Awaitable[TaskResult]
 ```
 
-- `message`: The user message for this turn.
-- `session_id`: Session identifier for conversation continuity (`None` on first turn).
-- `files`: Optional list of `ProcessedFile` (base64-encoded file attachments).
+| Parameter | Description |
+|-----------|-------------|
+| `message` | The user message for this turn. |
+| `session_id` | Session identifier for conversation continuity (`None` on first turn). |
+| `files` | Optional list of `ProcessedFile` (base64-encoded file attachments). |
+| `setup_context` | Optional dict from `before_all` / `before` hooks. `None` when no hooks are configured. |
+
+> `setup_context` is backwards compatible — existing tasks that don't declare this parameter continue to work without modification.
 
 ### TaskResult fields
 
@@ -76,7 +82,7 @@ def run(
 
 ```python
 class MyAsyncTask(BaseTask):
-    async def run(self, message, session_id=None, files=None):
+    async def run(self, message, session_id=None, files=None, setup_context=None):
         response = await my_async_agent.chat(message, session_id=session_id)
         return TaskResult(
             message=response.text,
@@ -90,7 +96,7 @@ class MyAsyncTask(BaseTask):
 from netra.simulation import BaseTask, TaskResult, ProcessedFile
 
 class FileTask(BaseTask):
-    def run(self, message, session_id=None, files=None):
+    def run(self, message, session_id=None, files=None, setup_context=None):
         if files:
             for f in files:
                 print(f.file_name, f.content_type, len(f.data))
@@ -115,16 +121,193 @@ result = Netra.simulation.run_simulation(
 )
 ```
 
-| Parameter         | Type       | Required | Default | Description                              |
-| ----------------- | ---------- | -------- | ------- | ---------------------------------------- |
-| `name`            | `str`      | Yes      | —       | Display name for the simulation run      |
-| `dataset_id`      | `str`      | Yes      | —       | ID of the dataset on the Netra platform  |
-| `task`            | `BaseTask` | Yes      | —       | Your task implementation                 |
-| `context`         | `Any`      | No       | `None`  | Additional context passed to the backend |
-| `max_concurrency` | `int`      | No       | `5`     | Max parallel conversations               |
-| `max_turns`       | `int`      | No       | `50`    | Max turns per conversation               |
+| Parameter         | Type              | Required | Default | Description                                               |
+| ----------------- | ----------------- | -------- | ------- | --------------------------------------------------------- |
+| `name`            | `str`             | Yes      | —       | Display name for the simulation run                       |
+| `dataset_id`      | `str`             | Yes      | —       | ID of the dataset on the Netra platform                   |
+| `task`            | `BaseTask`        | Yes      | —       | Your task implementation                                  |
+| `context`         | `Any`             | No       | `None`  | Additional context passed to the backend                  |
+| `max_concurrency` | `int`             | No       | `5`     | Max parallel conversations                                |
+| `max_turns`       | `int`             | No       | `50`    | Max turns per conversation                                |
+| `hooks`           | `SimulationHooks` | No       | `None`  | Pre/post script hooks (see Hooks section below)           |
 
 Datasets for simulation are created and managed via the Netra dashboard.
+
+---
+
+## Hooks (Pre/Post Scripts)
+
+Multi-turn datasets often contain scenarios that share state — for example, Scenario 2 requires an employee created in Scenario 1. Rather than merging all related scenarios into one large item or relying on sequential ordering, you can use **hooks** to set up and tear down shared state around scenario execution.
+
+Hooks are defined on the **SDK side** — the actual scripts never leave your environment. Lightweight metadata (function name and docstring) is sent to the backend so the Netra UI can display which hooks are configured on a test run.
+
+### The four hook points
+
+| Hook | When it runs | Failure effect |
+|------|-------------|----------------|
+| `before_all` | Once, before any scenario starts | Entire run is marked failed; no scenarios execute |
+| `before` | Before specific scenarios only (keyed by `dataset_item_id`) | That scenario is marked `prescript_failed` (terminal; eval suppressed); others continue |
+| `after` | After specific scenarios only (keyed by `dataset_item_id`) | Logged as warning; does not affect scenario status |
+| `after_all` | Once, after all scenarios complete | Logged as warning; does not affect run status |
+
+### Context passing
+
+Hooks pass data to each other and to your `BaseTask` via a context dict:
+
+```
+before_all()                            → shared_context (dict)
+before[dataset_item_id](shared_context) → item_context merged into setup_context (if registered)
+BaseTask.run(..., setup_context=merged_context)
+after[dataset_item_id](result, setup_context) (if registered)
+after_all(results, shared_context)
+```
+
+`setup_context` is the merge of `before_all` + item `before`. Both `BaseTask.run` and item `after` hooks receive it so teardown can clean up per-scenario resources (tokens, accounts, etc.). `after_all` still receives only the run-level `shared_context` from `before_all`.
+
+### SimulationHooks
+
+```python
+from netra.simulation import SimulationHooks
+```
+
+```python
+@dataclass
+class SimulationHooks:
+    before_all: Optional[Callable] = None                # () -> dict | None
+    before:     Optional[dict[str, Callable]] = None     # Dict[dataset_item_id, (shared_context) -> dict | None]
+    after:      Optional[dict[str, Callable]] = None     # Dict[dataset_item_id, (result, setup_context) -> None]
+    after_all:  Optional[Callable] = None                # (results, shared_context) -> None
+```
+
+**Important changes:**
+- `before` and `after` are now **dicts** keyed by `dataset_item_id`
+- Only items with registered hooks will have their specific setup/teardown functions called
+- `before` functions receive only `shared_context` (no `dataset_item_id` parameter needed)
+- `after` functions receive `result` and `setup_context` (merged `before_all` + item `before`)
+
+All hooks can be sync or async.
+
+### Example — Item-specific setup for particular scenarios
+
+```python
+from netra.simulation import BaseTask, SimulationHooks, TaskResult
+
+# ---- Hooks ----
+
+def setup_environment():
+    """Create a test user before any scenario runs."""
+    user = api.create_user(name="Test User", department="Engineering")
+    return {"user_id": user.id}
+
+
+def setup_refund_scenario(shared_context):
+    """Setup specific to refund scenarios - creates refund account and token."""
+    token = api.login(user_id=shared_context["user_id"])
+    refund_account = api.create_refund_account()
+    return {"auth_token": token, "refund_account_id": refund_account.id}
+
+
+def setup_premium_scenario(shared_context):
+    """Setup specific to premium user scenarios."""
+    token = api.login(user_id=shared_context["user_id"])
+    api.upgrade_to_premium(shared_context["user_id"])
+    return {"auth_token": token, "is_premium": True}
+
+
+def teardown_refund_scenario(result, setup_context):
+    """Cleanup refund-specific resources using item setup context."""
+    api.logout(token=setup_context.get("auth_token"))
+    api.delete_refund_account(setup_context.get("refund_account_id"))
+
+
+def teardown_premium_scenario(result, setup_context):
+    """Cleanup premium-specific resources using item setup context."""
+    api.logout(token=setup_context.get("auth_token"))
+    api.downgrade_from_premium(setup_context["user_id"])
+
+
+def teardown_environment(results, shared_context):
+    """Delete the test user once all scenarios are done."""
+    api.delete_user(user_id=shared_context["user_id"])
+
+
+# Note: dataset_item_id values come from your dataset items in the Netra dashboard
+hooks = SimulationHooks(
+    before_all=setup_environment,
+    before={
+        "refund-scenario-001": setup_refund_scenario,
+        "refund-scenario-002": setup_refund_scenario,
+        "premium-user-001": setup_premium_scenario,
+    },
+    after={
+        "refund-scenario-001": teardown_refund_scenario,
+        "refund-scenario-002": teardown_refund_scenario,
+        "premium-user-001": teardown_premium_scenario,
+    },
+    after_all=teardown_environment,
+)
+
+
+# ---- Task ----
+
+class MyAgentTask(BaseTask):
+    def run(self, message, session_id=None, files=None, setup_context=None):
+        ctx = setup_context or {}
+        response = my_agent.chat(
+            message,
+            session_id=session_id,
+            auth_token=ctx.get("auth_token"),
+            is_premium=ctx.get("is_premium", False),
+        )
+        return TaskResult(
+            message=response.text,
+            session_id=session_id or response.session_id or "default",
+        )
+
+
+# ---- Run ----
+
+result = Netra.simulation.run_simulation(
+    name="Multi-Scenario Workflow Test",
+    dataset_id="your-dataset-id",
+    task=MyAgentTask(),
+    hooks=hooks,
+    max_concurrency=3,
+)
+```
+
+### Async hooks
+
+```python
+async def setup_environment():
+    user = await async_api.create_user(name="Test User")
+    return {"user_id": user.id}
+
+async def setup_refund_scenario(shared_context):
+    token = await async_api.login(shared_context["user_id"])
+    return {"auth_token": token}
+
+hooks = SimulationHooks(
+    before_all=setup_environment,
+    before={"refund-scenario-001": setup_refund_scenario},
+)
+```
+
+### Hooks-only (no after hooks needed)
+
+```python
+hooks = SimulationHooks(
+    before_all=setup_environment,
+)
+```
+
+All hooks are optional. Omit any you don't need.
+
+### Netra UI display
+
+When `hooks` are passed, lightweight descriptors (function name and docstring) are sent to the backend as `lifecycleHooks` and the Netra dashboard shows which hook types are configured on the test run (e.g. "Has pre-script" badge). The actual script code is never stored by Netra.
+
+---
 
 ## Validation Checklist
 
@@ -132,6 +315,12 @@ Datasets for simulation are created and managed via the Netra dashboard.
 2. `NETRA_API_KEY` and `NETRA_OTLP_ENDPOINT` are set.
 3. Task's `run()` always returns a `TaskResult` with both `message` and `session_id`.
 4. `Netra.shutdown()` is called on graceful termination.
+5. When using hooks: `before_all` returns a `dict` or `None` (other types are ignored).
+6. When using hooks: `before` dict values (functions) receive only `shared_context` and return `dict` or `None`.
+7. When using hooks: `after` dict values (functions) receive `result` and `setup_context` (merged `before_all` + item `before`); return value is ignored. `after` also runs when the scenario fails or exceeds max turns.
+8. When using hooks: `after_all` should not raise — wrap risky cleanup in try/except.
+9. Hook dict keys must match `dataset_item_id` values from your dataset.
+10. A `prescript_failed` scenario is **terminal** — the SDK polling loop will not wait for it. Its `evalStatus` is set to `NOT_AVAILABLE` automatically and it cannot be overwritten by a timeout sweep. If all scenarios end as `failed` or `prescript_failed`, the run's evaluation status resolves to `NOT_AVAILABLE`.
 
 ## References
 
