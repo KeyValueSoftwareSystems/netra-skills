@@ -41,6 +41,30 @@ Once configured, run this skill again.
 
 Do not proceed to any subsequent phase until a valid default provider is confirmed.
 
+### Phase 0.5: Detect Project Language
+
+Before generating any SDK code (task implementations, hooks scaffolds, execution examples), determine whether the project is **Python** or **TypeScript/JavaScript**. Check the project root in this order:
+
+| Signal file                                                 | Language                |
+| ----------------------------------------------------------- | ----------------------- |
+| `pyproject.toml`, `setup.py`, `requirements.txt`, `Pipfile` | Python                  |
+| `package.json`, `tsconfig.json`, `bun.lockb`                | TypeScript / JavaScript |
+
+If both are present (monorepo), ask the user which sub-project they are working on. If neither is found, ask the user.
+
+**From this point forward, generate ONLY the SDK examples for the detected language. Never mix Python and TypeScript conventions.**
+
+Language-specific conventions for this skill:
+
+| Concept | Python | TypeScript |
+|---------|--------|------------|
+| Init | `Netra.init(...)` (sync) | `await Netra.init(...)` |
+| Simulation API | `Netra.simulation.run_simulation(...)` | `await Netra.simulation.runSimulation({...})` |
+| Evaluation API | `Netra.evaluation.run_test_suite(...)` | `await Netra.evaluation.runTestSuite({...})` |
+| Hook fields | `before_all`, `after_all`, `setup_context`, `session_id`, `dataset_item_id` | `beforeAll`, `afterAll`, `setupContext`, `sessionId`, `datasetItemId` |
+| Hooks object | `SimulationHooks(before_all=..., before={...})` | `const hooks: SimulationHooks = { beforeAll: ..., before: {...} }` |
+| Hook descriptions | Python docstring on the function (**required**) | `(fn as any).description = "..."` on **every** hook function (**required**, ≤ 200 chars; no runtime docstrings) |
+
 ### Phase 1: Ingest the Specification
 
 1. Read the specification document provided by the user (file path, pasted text, or URL).
@@ -307,13 +331,15 @@ If the specification describes a conversation, workflow, support interaction, tr
 
 - Set Turn Type = `multi`
 - Set Eval Type = `session` — MUST be explicitly passed to `netra_create_evaluator`
-- Use `Netra.simulation.run_simulation()` for execution
+- Use the language-appropriate simulation API:
+  - Python: `Netra.simulation.run_simulation()`
+  - TypeScript: `await Netra.simulation.runSimulation({...})`
 
 Never invoke the agent directly for simulation execution.
 
 The user must provide a task implementation compatible with Netra Simulation.
 
-Example:
+**Python example:**
 
 ```python
 class MyAgentTask(BaseTask):
@@ -342,8 +368,6 @@ class MyAgentTask(BaseTask):
         )
 ```
 
-Execution example (without hooks):
-
 ```python
 result = Netra.simulation.run_simulation(
     name="Customer Support Simulation",
@@ -351,20 +375,50 @@ result = Netra.simulation.run_simulation(
     task=MyAgentTask(my_agent),
     context={"environment": "staging"},
     max_concurrency=5,
+    hooks=hooks,  # optional SimulationHooks from Phase 3g
 )
 ```
 
-Execution example (with hooks — generated in Phase 3g when correlations are detected):
+**TypeScript example:**
 
-```python
-result = Netra.simulation.run_simulation(
-    name="Customer Support Simulation",
-    dataset_id="dataset-123",
-    task=MyAgentTask(my_agent),
-    context={"environment": "staging"},
-    max_concurrency=5,
-    hooks=hooks,  # SimulationHooks instance from Phase 3g
-)
+```typescript
+import { BaseTask } from "netra-sdk";
+import type { ProcessedFile, TaskResult } from "netra-sdk";
+
+class MyAgentTask extends BaseTask {
+  constructor(private agent: any) {
+    super();
+  }
+
+  async run(
+    message: string,
+    sessionId?: string | null,
+    files?: ProcessedFile[] | null,
+    setupContext?: Record<string, any> | null, // populated by beforeAll / before hooks
+  ): Promise<TaskResult> {
+    const ctx = setupContext || {};
+    const response = await this.agent.chat(message, {
+      sessionId,
+      files,
+      authToken: ctx.authToken,
+    });
+    return {
+      message: response.text,
+      sessionId: sessionId || "default",
+    };
+  }
+}
+```
+
+```typescript
+const result = await Netra.simulation.runSimulation({
+  name: "Customer Support Simulation",
+  datasetId: "dataset-123",
+  task: new MyAgentTask(myAgent),
+  context: { environment: "staging" },
+  maxConcurrency: 5,
+  hooks, // optional SimulationHooks from Phase 3g
+});
 ```
 
 This ensures:
@@ -435,14 +489,16 @@ For each detected correlation pattern, decide which hook level to use:
 - If **all** items end in either `failed` or `prescript_failed` (with no successfully completed items), the run's overall evaluation status resolves to `NOT_AVAILABLE`.
 - A `prescript_failed` item's status is stable — it will never be overwritten by a subsequent bulk-failure sweep (e.g. on run timeout).
 
-**How to determine dataset_item_id for hook mapping:**
+**How to determine dataset item IDs for hook mapping:**
 
 When generating the plan, you will create dataset items with specific IDs. These IDs are returned by the `netra_create_dataset_item` MCP call. After all items are created, instruct the user to:
 
-1. Map the returned `dataset_item_id` values to the corresponding scenarios
-2. Use these IDs as keys in the `SimulationHooks.before` and `SimulationHooks.after` dictionaries
+1. Map the returned dataset item ID values to the corresponding scenarios
+2. Use these IDs as keys in `SimulationHooks.before` / `SimulationHooks.after`
+   - Python keys: `dataset_item_id` strings
+   - TypeScript keys: same ID strings (SDK type field name is `datasetItemId`)
 
-Example workflow:
+**Python mapping example:**
 ```python
 # Step 1: Create dataset items and capture their IDs
 refund_item = netra_create_dataset_item(...)  # returns {"id": "item-abc-123", ...}
@@ -463,16 +519,42 @@ hooks = SimulationHooks(
 )
 ```
 
+**TypeScript mapping example:**
+```typescript
+// Step 1: Create dataset items and capture their IDs
+const refundItem = /* netra_create_dataset_item(...) → { id: "item-abc-123", ... } */;
+const balanceItem = /* netra_create_dataset_item(...) → { id: "item-xyz-789", ... } */;
+
+// Step 2: Map hooks using the actual datasetItemId values
+const hooks: SimulationHooks = {
+  beforeAll,
+  before: {
+    "item-abc-123": setupRefundScenario,
+    "item-xyz-789": setupBalanceScenario,
+  },
+  after: {
+    "item-abc-123": teardownRefundScenario,
+    "item-xyz-789": teardownBalanceScenario,
+  },
+  afterAll,
+};
+```
+
 #### Step 3: Generate Hook Scaffold Code
 
-For each hook identified, generate a Python scaffold with:
+For each hook identified, generate a scaffold in the **detected project language** (Phase 0.5) with:
 - The function signature matching the required hook level
-- Docstring explaining what the hook does
-- Placeholder for the actual implementation (marked with `# TODO`)
-- The `SimulationHooks(...)` call wiring the hooks together
-- The updated `run_simulation(...)` call passing `hooks=`
+- A short description of what the hook does:
+  - Python: a docstring on **every** hook function
+  - TypeScript: `(fn as any).description = "..."` on **every** hook function (≤ 200 chars). Never omit this — without it the Netra UI gets `description: null`.
+- Placeholder for the actual implementation (marked with `# TODO` / `// TODO`)
+- The `SimulationHooks` wiring
+- The updated simulation run call passing `hooks`
 
-**Hook function signatures:**
+**Do not generate Python scaffolds for a TypeScript project, or vice versa.**
+**Do not generate TypeScript hooks without `.description` attached.**
+
+**Python hook function signatures:**
 
 ```python
 # before_all: no args → returns dict (shared context) or None
@@ -495,10 +577,48 @@ def after_all(results: dict, shared_context: dict | None) -> None:
     ...
 ```
 
-All hooks can be async (`async def`) if the user's setup code is async.
+All Python hooks can be async (`async def`) if the user's setup code is async.
 
+**TypeScript hook function signatures:**
+
+```typescript
+// beforeAll: no args → returns shared context object or null/void
+async function beforeAll(): Promise<Record<string, any> | null | void> {
+  ...
+}
+(beforeAll as any).description = "One-line description for the Netra UI.";
+
+// before: Record keyed by datasetItemId; each receives sharedContext → returns item context
+async function setupScenarioA(
+  sharedContext: Record<string, any> | null,
+): Promise<Record<string, any> | null | void> {
+  ...
+}
+(setupScenarioA as any).description = "One-line description for the Netra UI.";
+
+// after: Record keyed by datasetItemId; each receives result + setupContext
+async function teardownScenarioA(
+  result: Record<string, any>,
+  setupContext: Record<string, any> | null,
+): Promise<void> {
+  ...
+}
+(teardownScenarioA as any).description = "One-line description for the Netra UI.";
+
+// afterAll: receives aggregated results and sharedContext (beforeAll only)
+async function afterAll(
+  results: Record<string, any>,
+  sharedContext: Record<string, any> | null,
+): Promise<void> {
+  ...
+}
+(afterAll as any).description = "One-line description for the Netra UI.";
+```
+
+**Required:** every TypeScript hook above must set `.description`. Omitting it sends `description: null` in `lifecycleHooks`.
 **Context passing pattern:**
 
+Python:
 ```
 before_all()                                      → shared_context (dict | None)
 hooks.before[dataset_item_id](shared_context)     → merged into setup_context
@@ -507,11 +627,20 @@ hooks.after[dataset_item_id](result, setup_context)  ← same merged context for
 after_all(results, shared_context)                ← run-level shared_context only
 ```
 
-**Important:** The `before` and `after` hooks are dictionaries keyed by `dataset_item_id`, not single functions. Each scenario that requires specific setup/teardown gets its own function, and these functions are registered in the `SimulationHooks` using the stable dataset item ID as the key.
+TypeScript:
+```
+beforeAll()                                       → sharedContext (Record | null)
+hooks.before[datasetItemId](sharedContext)        → merged into setupContext
+BaseTask.run(..., setupContext)                   ← receives merged context
+hooks.after[datasetItemId](result, setupContext)  ← same merged context for cleanup
+afterAll(results, sharedContext)                  ← run-level sharedContext only
+```
 
-The `setup_context` dict is the merge of `shared_context` (from `before_all`) with any dict returned by the item `before` hook. It is passed to both `BaseTask.run()` and the item `after` hook so teardown can clean up per-scenario resources (tokens, accounts, etc.). `after_all` still receives only the run-level `shared_context`.
+**Important:** The `before` and `after` hooks are dictionaries keyed by dataset item ID, not single functions. Each scenario that requires specific setup/teardown gets its own function, and these functions are registered in `SimulationHooks` using the stable dataset item ID as the key.
 
-**Full scaffold example (employee + per-scenario auth pattern):**
+The setup context is the merge of shared context (from `before_all` / `beforeAll`) with any object returned by the item `before` hook. It is passed to both `BaseTask.run()` and the item `after` hook so teardown can clean up per-scenario resources (tokens, accounts, etc.). `after_all` / `afterAll` still receives only the run-level shared context.
+
+**Full Python scaffold example (employee + per-scenario auth pattern):**
 
 Assume dataset has two items:
 - `dataset_item_id = "item-refund-request"` → scenario requiring auth
@@ -617,6 +746,124 @@ result = Netra.simulation.run_simulation(
 )
 ```
 
+**Full TypeScript scaffold example (same pattern):**
+
+```typescript
+import { BaseTask, Netra } from "netra-sdk";
+import type { ProcessedFile, SimulationHooks, TaskResult } from "netra-sdk";
+
+// ---- Hooks ----
+
+async function beforeAll(): Promise<Record<string, any> | null> {
+  // TODO: replace with your actual setup code
+  const employee = await yourApi.createEmployee({ name: "Test User", role: "admin" });
+  return { employeeId: employee.id };
+}
+(beforeAll as any).description =
+  "Create the test employee and assign the admin role before any scenario runs.";
+
+async function setupRefundScenario(
+  sharedContext: Record<string, any> | null,
+): Promise<Record<string, any> | null> {
+  const employeeId = sharedContext?.employeeId;
+  // TODO: replace with your actual login logic
+  const token = await yourApi.login({ employeeId });
+  return { authToken: token };
+}
+(setupRefundScenario as any).description =
+  "Obtain a fresh auth token for refund scenario.";
+
+async function setupBalanceScenario(
+  sharedContext: Record<string, any> | null,
+): Promise<Record<string, any> | null> {
+  const employeeId = sharedContext?.employeeId;
+  const token = await yourApi.login({ employeeId });
+  return { authToken: token };
+}
+(setupBalanceScenario as any).description =
+  "Obtain a fresh auth token for balance inquiry scenario.";
+
+async function teardownRefundScenario(
+  result: Record<string, any>,
+  setupContext: Record<string, any> | null,
+): Promise<void> {
+  try {
+    await yourApi.logout({ token: setupContext?.authToken });
+  } catch {
+    // after failures are logged but do not affect scenario status
+  }
+}
+(teardownRefundScenario as any).description =
+  "Log out after refund scenario regardless of outcome.";
+
+async function teardownBalanceScenario(
+  result: Record<string, any>,
+  setupContext: Record<string, any> | null,
+): Promise<void> {
+  try {
+    await yourApi.logout({ token: setupContext?.authToken });
+  } catch {
+    // ignore
+  }
+}
+(teardownBalanceScenario as any).description =
+  "Log out after balance inquiry scenario.";
+
+async function afterAll(
+  results: Record<string, any>,
+  sharedContext: Record<string, any> | null,
+): Promise<void> {
+  // TODO: replace with your actual teardown code
+  await yourApi.deleteEmployee(sharedContext?.employeeId);
+}
+(afterAll as any).description =
+  "Delete the test employee once all scenarios have finished.";
+
+const hooks: SimulationHooks = {
+  beforeAll,
+  before: {
+    "item-refund-request": setupRefundScenario,
+    "item-balance-inquiry": setupBalanceScenario,
+  },
+  after: {
+    "item-refund-request": teardownRefundScenario,
+    "item-balance-inquiry": teardownBalanceScenario,
+  },
+  afterAll,
+};
+
+// ---- Task ----
+
+class MyAgentTask extends BaseTask {
+  async run(
+    message: string,
+    sessionId?: string | null,
+    files?: ProcessedFile[] | null,
+    setupContext?: Record<string, any> | null,
+  ): Promise<TaskResult> {
+    const ctx = setupContext || {};
+    const response = await myAgent.chat(message, {
+      sessionId,
+      authToken: ctx.authToken,
+    });
+    return {
+      message: response.text,
+      sessionId: sessionId || response.sessionId || "default",
+    };
+  }
+}
+
+// ---- Run ----
+
+const result = await Netra.simulation.runSimulation({
+  name: "My Simulation",
+  datasetId: "dataset-123",
+  task: new MyAgentTask(),
+  hooks,
+  maxConcurrency: 3,
+});
+```
+
 #### Step 4: Flag Hook Requirement in the Plan
 
 In the plan, add a "Hooks" section under the Dataset Configuration table when hooks are needed. When no hooks are needed, state explicitly:
@@ -625,25 +872,25 @@ In the plan, add a "Hooks" section under the Dataset Configuration table when ho
 **Hooks:** Not required — scenarios are independent.
 ```
 
-When hooks are needed, list each hook type with a one-line description and specify which scenarios require item-specific hooks:
+When hooks are needed, list each hook type with a one-line description and specify which scenarios require item-specific hooks. Use language-appropriate names in the plan (`before_all` for Python, `beforeAll` for TypeScript):
 
 ```
 **Hooks:**
-- `before_all`: Create shared test employee and assign admin role
-- `before`: Per-scenario hooks keyed by dataset_item_id:
+- `before_all` / `beforeAll`: Create shared test employee and assign admin role
+- `before`: Per-scenario hooks keyed by dataset item ID:
   - Refund Request scenario: Obtain auth token via login
   - Balance Inquiry scenario: Obtain auth token via login
-- `after`: Per-scenario hooks keyed by dataset_item_id:
+- `after`: Per-scenario hooks keyed by dataset item ID:
   - Refund Request scenario: Log out after scenario
   - Balance Inquiry scenario: Log out after scenario
-- `after_all`: Delete the test employee
+- `after_all` / `afterAll`: Delete the test employee
 ```
 
 In the Netra UI Conversation tab for a scenario:
-- `before_all` / `after_all` appear for every scenario in that run (run-level metadata)
-- `before` / `after` appear only when that scenario's `dataset_item_id` was registered in the hooks dict (item-level metadata)
+- `before_all` / `beforeAll` and `after_all` / `afterAll` appear for every scenario in that run (run-level metadata)
+- `before` / `after` appear only when that scenario's dataset item ID was registered in the hooks dict (item-level metadata)
 
-**Important:** The actual `dataset_item_id` values will only be available after creating the dataset items via MCP. In the generated scaffold code, use placeholder IDs (e.g., `"item-refund-request"`, `"item-balance-inquiry"`) and instruct the user to replace these with the actual IDs returned by `netra_create_dataset_item`.
+**Important:** The actual dataset item ID values will only be available after creating the dataset items via MCP. In the generated scaffold code, use placeholder IDs (e.g., `"item-refund-request"`, `"item-balance-inquiry"`) and instruct the user to replace these with the actual IDs returned by `netra_create_dataset_item`.
 
 Then include the generated scaffold code in a collapsible code block under the plan summary.
 
@@ -665,16 +912,18 @@ Produce the plan in the exact format below. This is the primary output the user 
 | **Name** | {generated-dataset-name} |
 | **Description** | {generated-description} |
 | **Turn Type** | {single | multi} |
-| **Execution Method** | {Netra.evaluation.run_test_suite | Netra.simulation.run_simulation} |
+| **Execution Method** | {Netra.evaluation.run_test_suite / Netra.evaluation.runTestSuite | Netra.simulation.run_simulation / Netra.simulation.runSimulation} |
 | **Total Items** | {count} |
 
 ### Execution Strategy
 
 Single-turn datasets:
-- Execute using `Netra.evaluation.run_test_suite()`
+- Python: `Netra.evaluation.run_test_suite()`
+- TypeScript: `await Netra.evaluation.runTestSuite({...})`
 
 Multi-turn datasets:
-- Execute using `Netra.simulation.run_simulation()`
+- Python: `Netra.simulation.run_simulation()`
+- TypeScript: `await Netra.simulation.runSimulation({...})`
 
 If Turn Type = `multi`, include:
 
@@ -690,14 +939,14 @@ If Turn Type = `multi` and hooks were identified in Phase 3g, include a **Hooks*
 
 {Either "Not required — scenarios are independent." OR a list like:}
 
-- `before_all`: {one-line description}
+- `before_all` / `beforeAll`: {one-line description}
 - `before`: {one-line description}
 - `after`: {one-line description}
-- `after_all`: {one-line description}
+- `after_all` / `afterAll`: {one-line description}
 
-**Generated scaffold code** (requires user to fill in TODO sections):
+**Generated scaffold code** (requires user to fill in TODO sections; language = Phase 0.5 detection):
 
-{paste the full scaffold code block from Phase 3g here}
+{paste the full scaffold code block from Phase 3g here — Python OR TypeScript, not both}
 ```
 ---
 
@@ -1079,8 +1328,8 @@ After successful creation, output:
 6. **Don't over-evaluate.** Not every item needs 5 evaluators. Match evaluator count to scenario complexity — simple happy paths may need 1-2, complex edge cases may need 3-4.
 7. **Prefer span output over taskOutput** when the evaluator checks an intermediate step. Use `taskOutput` only when evaluating the final user-facing response.
 8. Never execute the agent directly for evaluation runs.
-   - Single-turn evaluations must use `Netra.evaluation.run_test_suite()`.
-   - Multi-turn simulations must use `Netra.simulation.run_simulation()`.
+   - Single-turn evaluations must use `Netra.evaluation.run_test_suite()` (Python) or `await Netra.evaluation.runTestSuite({...})` (TypeScript).
+   - Multi-turn simulations must use `Netra.simulation.run_simulation()` (Python) or `await Netra.simulation.runSimulation({...})` (TypeScript).
 
 9. Trace IDs are required for evaluator execution.
    Any execution strategy that bypasses Netra Evaluation or Simulation APIs is invalid.
@@ -1088,16 +1337,18 @@ After successful creation, output:
 10. Multi-turn simulations require a task implementation that extends `BaseTask`.
     The generated plan must explicitly mention this requirement.
 
-11. When generating execution examples, use the official Netra SDK execution APIs.
+11. When generating execution examples, use the official Netra SDK execution APIs for the detected language (Phase 0.5).
     Do not generate examples that directly invoke the agent for evaluation execution.
+    Do not mix Python and TypeScript conventions in the same scaffold.
 
 12. Variable mappings that reference spans are only valid when execution occurs through Netra Evaluation or Simulation APIs that generate trace data.
 
 13. For multi-turn simulations, include a task implementation example using:
     - `BaseTask`
     - `TaskResult`
-    - `session_id`
-    - `Netra.simulation.run_simulation()`
+    - `session_id` (Python) / `sessionId` (TypeScript)
+    - `setup_context` (Python) / `setupContext` (TypeScript) when hooks are used
+    - `Netra.simulation.run_simulation()` (Python) / `await Netra.simulation.runSimulation({...})` (TypeScript)
 
 14. Resolve the organization's default provider/model only when creating a project evaluator from a library evaluator.
     Once resolved, pass the config explicitly to `netra_create_evaluator` using `provider_id` (snake_case).
@@ -1201,8 +1452,9 @@ Bad:
 
 25. MCP tools (`netra_create_test_run`, `netra_submit_test_run_item`) are for manual/programmatic
     result submission only. They require a `trace_id` from an existing trace. Do NOT use them as a
-    substitute for `Netra.evaluation.run_test_suite()` or `Netra.simulation.run_simulation()` — those
-    SDK methods handle agent execution, trace capture, and result submission automatically.
+    substitute for the SDK evaluation/simulation run APIs (`run_test_suite` / `runTestSuite`,
+    `run_simulation` / `runSimulation`) — those SDK methods handle agent execution, trace capture,
+    and result submission automatically.
 
 26. When using `Netra.evaluation.run_test_suite()` with a remote Netra dataset:
 
@@ -1308,22 +1560,25 @@ Bad:
 33. **Hooks live entirely on the user's side.** Scripts are never uploaded to or stored by Netra. At run creation the SDK sends lightweight descriptors (`lifecycleHooks`) only:
     - `beforeAll` / `afterAll` → stored on the test run (shown on every scenario in that run)
     - `before` / `after` per `datasetItemId` → stored on each matching test run item (shown only on that scenario's Conversation tab)
-    The generated scaffold code belongs in the user's codebase, not in the Netra dataset configuration. Always key `SimulationHooks.before` / `after` by real `dataset_item_id` values so the correct scenario UI shows the correct pre/post script.
+    The generated scaffold code belongs in the user's codebase, not in the Netra dataset configuration. Always key `SimulationHooks.before` / `after` by real dataset item ID values so the correct scenario UI shows the correct pre/post script.
 
 34. **Never collapse correlated scenarios into a single large item to avoid hooks.** Merging related scenarios degrades evaluator accuracy (session evaluators score the entire conversation — a merged scenario is harder to judge) and makes the dataset harder to maintain. Recommend hooks instead.
 
-35. **Never suggest sequential execution as a workaround for correlation.** Sequential execution (max_concurrency=1) prevents collisions but means a single scenario failure blocks all subsequent ones. Hooks are the correct solution.
+35. **Never suggest sequential execution as a workaround for correlation.** Sequential execution (`max_concurrency=1` / `maxConcurrency: 1`) prevents collisions but means a single scenario failure blocks all subsequent ones. Hooks are the correct solution.
 
-36. **`before_all` failure is fatal for the entire run.** If the setup code raises, no scenarios run and the run is marked failed. Only put truly required global setup in `before_all`. Optional or per-scenario setup belongs in `before`.
+36. **`before_all` / `beforeAll` failure is fatal for the entire run.** If the setup code raises, no scenarios run and the run is marked failed. `after_all` / `afterAll` still runs for cleanup. Only put truly required global setup in `beforeAll`. Optional or per-scenario setup belongs in `before`.
 
-37. **`after` and `after_all` must be robust.** These hooks run even when scenarios fail. Wrap risky cleanup logic in try/except so a teardown error does not obscure the actual scenario failure reason.
+37. **`after` and `after_all` / `afterAll` must be robust.** These hooks run even when scenarios fail (and `afterAll` also runs when `beforeAll` fails). Wrap risky cleanup logic in try/except (Python) or try/catch (TypeScript) so a teardown error does not obscure the actual scenario failure reason.
 
-38. **`setup_context` is how hooks share data with BaseTask.run() and item `after` hooks.** The dict returned by `before_all` and `before` is merged and passed as `setup_context` to every call of `BaseTask.run()` for that scenario, and again to the item `after` hook for cleanup. Generated scaffolding must use `after(result, setup_context)` — not `shared_context` — so teardown can access item-level keys (tokens, accounts). The task must declare `setup_context: Optional[dict] = None` in its `run()` signature to receive it. Existing tasks that do not declare it continue to work (backwards compatible). `after_all` still receives only the run-level `shared_context` from `before_all`.
+38. **Setup context is how hooks share data with `BaseTask.run()` and item `after` hooks.** The object returned by `before_all` / `beforeAll` and `before` is merged and passed as `setup_context` / `setupContext` to every call of `BaseTask.run()` for that scenario, and again to the item `after` hook for cleanup. Generated scaffolding must use `after(result, setup_context)` / `after(result, setupContext)` — not shared context alone — so teardown can access item-level keys (tokens, accounts). The task must declare the setup-context parameter in its `run()` signature to receive it. Existing tasks that do not declare it continue to work (backwards compatible). `after_all` / `afterAll` still receives only the run-level shared context from `beforeAll`.
 
-39. **Always include a `hooks` usage example in the generated scaffold code** when hooks are recommended. The example must show:
-    - The `SimulationHooks(...)` instantiation with all recommended hooks wired
-    - A `BaseTask.run()` that accepts and uses `setup_context`
-    - The `Netra.simulation.run_simulation(..., hooks=hooks)` call
+39. **Always include a `hooks` usage example in the generated scaffold code** when hooks are recommended. The example must match the detected language and show:
+    - The `SimulationHooks` instantiation with all recommended hooks wired
+    - A `BaseTask.run()` that accepts and uses `setup_context` / `setupContext`
+    - The simulation run call with `hooks` (`run_simulation(..., hooks=hooks)` or `runSimulation({ ..., hooks })`)
+    - Hook descriptions on **every** function:
+      - Python: a docstring on each hook
+      - TypeScript: `(fn as any).description = "..."` on each hook (required; ≤ 200 chars). Never ship TypeScript hooks without descriptions — the SDK otherwise sends `description: null` in `lifecycleHooks`.
 
 40. **Clearly communicate the `prescript_failed` status to the user.** When a `before` hook fails for a specific scenario, the test run item's status is set to `prescript_failed` rather than `failed`. Key properties of this status:
     - Visible in the Netra dashboard — distinguishes setup failures from actual agent failures
@@ -1331,6 +1586,8 @@ Bad:
     - **Eval suppressed**: `evalStatus` is set to `NOT_AVAILABLE` immediately — no evaluators run for that item
     - **Stable**: a `prescript_failed` item's status cannot be overwritten by bulk-failure sweeps (e.g. on run timeout)
     - **Evaluation roll-up**: if every item in the run ends as `failed` or `prescript_failed`, the run's evaluation status is `NOT_AVAILABLE`
+
+41. **Also sync TypeScript simulation guidance** with `netra-best-practices/references/typescript/simulation.md` when updating hook behavior. Python guidance lives in `references/python/simulation.md`. Keep both languages at feature parity for hooks, including description/docstring requirements.
 
 ## Reference
 

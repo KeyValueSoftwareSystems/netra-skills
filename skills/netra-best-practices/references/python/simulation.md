@@ -145,10 +145,10 @@ Hooks are defined on the **SDK side** — the actual scripts never leave your en
 
 | Hook | When it runs | Failure effect |
 |------|-------------|----------------|
-| `before_all` | Once, before any scenario starts | Entire run is marked failed; no scenarios execute |
+| `before_all` | Once, before any scenario starts | Entire run is marked failed; no scenarios execute (`after_all` still runs for cleanup) |
 | `before` | Before specific scenarios only (keyed by `dataset_item_id`) | That scenario is marked `prescript_failed` (terminal; eval suppressed); others continue |
 | `after` | After specific scenarios only (keyed by `dataset_item_id`) | Logged as warning; does not affect scenario status |
-| `after_all` | Once, after all scenarios complete | Logged as warning; does not affect run status |
+| `after_all` | Once, after all scenarios complete (including `before_all` failure) | Logged as warning; does not affect run status |
 
 ### Context passing
 
@@ -318,7 +318,7 @@ When `hooks` are passed, lightweight descriptors (function name and docstring) a
 5. When using hooks: `before_all` returns a `dict` or `None` (other types are ignored).
 6. When using hooks: `before` dict values (functions) receive only `shared_context` and return `dict` or `None`.
 7. When using hooks: `after` dict values (functions) receive `result` and `setup_context` (merged `before_all` + item `before`); return value is ignored. `after` also runs when the scenario fails or exceeds max turns.
-8. When using hooks: `after_all` should not raise — wrap risky cleanup in try/except.
+8. When using hooks: `after_all` should not raise — wrap risky cleanup in try/except. It also runs when `before_all` fails.
 9. Hook dict keys must match `dataset_item_id` values from your dataset.
 10. A `prescript_failed` scenario is **terminal** — the SDK polling loop will not wait for it. Its `evalStatus` is set to `NOT_AVAILABLE` automatically and it cannot be overwritten by a timeout sweep. If all scenarios end as `failed` or `prescript_failed`, the run's evaluation status resolves to `NOT_AVAILABLE`.
 
