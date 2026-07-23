@@ -61,8 +61,8 @@ Language-specific conventions for this skill:
 | Init | `Netra.init(...)` (sync) | `await Netra.init(...)` |
 | Simulation API | `Netra.simulation.run_simulation(...)` | `await Netra.simulation.runSimulation({...})` |
 | Evaluation API | `Netra.evaluation.run_test_suite(...)` | `await Netra.evaluation.runTestSuite({...})` |
-| Hook fields | `before_all`, `after_all`, `setup_context`, `session_id`, `dataset_item_id` | `beforeAll`, `afterAll`, `setupContext`, `sessionId`, `datasetItemId` |
-| Hooks object | `SimulationHooks(before_all=..., before={...})` | `const hooks: SimulationHooks = { beforeAll: ..., before: {...} }` |
+| Hook fields | `before_all`, `before_each`, `before`, `after`, `after_each`, `after_all`, `setup_context`, `session_id`, `dataset_item_id` | `beforeAll`, `beforeEach`, `before`, `after`, `afterEach`, `afterAll`, `setupContext`, `sessionId`, `datasetItemId` |
+| Hooks object | `SimulationHooks(before_all=..., before_each=..., before={...})` | `const hooks: SimulationHooks = { beforeAll: ..., beforeEach: ..., before: {...} }` |
 | Hook descriptions | Python docstring on the function (**required**) | `(fn as any).description = "..."` on **every** hook function (**required**, ≤ 200 chars; no runtime docstrings) |
 
 ### Phase 1: Ingest the Specification
@@ -459,11 +459,12 @@ Read every scenario in the plan and flag correlations in these categories:
 | Pattern | Description | Hook required |
 |---------|-------------|---------------|
 | **Shared resource** | Scenario B operates on an entity created by Scenario A (employee, account, record) | `before_all` to create the entity once |
-| **Authentication state** | Scenarios need a logged-in session or token | `before_all` or `before` to obtain credentials |
+| **Authentication state** | Scenarios need a logged-in session or token | `before_each` for a fresh token every scenario; `before` for scenario-specific credentials |
 | **Data seeding** | All scenarios require the same seed data (catalog, config, reference records) | `before_all` to populate |
 | **External service state** | Scenarios require a third-party service to be in a specific state | `before_all` / `after_all` to set up and reset |
-| **Isolation needed** | Each scenario must start with a clean slate (independent user, fresh cart) | `before` to reset per scenario |
-| **Cleanup required** | Resources created during a scenario must be deleted afterwards | `after` or `after_all` |
+| **Common per-item setup** | Every scenario needs the same isolation step (fresh token, clean cart) | `before_each` / `after_each` |
+| **Isolation needed** | Only some scenarios need a clean slate | `before[dataset_item_id]` |
+| **Cleanup required** | Resources created during a scenario must be deleted afterwards | `after` / `after_each` or `after_all` |
 
 If no correlations are found, hooks are not required. State this explicitly in the plan.
 
@@ -474,14 +475,17 @@ For each detected correlation pattern, decide which hook level to use:
 | Situation | Recommended hook | Rationale |
 |-----------|-----------------|-----------|
 | Create a resource used by ALL scenarios | `before_all` | Run once; cheaper than per-scenario creation |
-| Set up per-scenario isolation (fresh session, unique user) | `before[dataset_item_id]` | Each scenario gets its own clean state |
-| Tear down per-scenario resources | `after[dataset_item_id]` | Clean up immediately; don't wait for run to end |
+| Same setup for EVERY scenario (fresh token, clean cart) | `before_each` | Avoid duplicating the same `before` for every item |
+| Set up only for specific scenarios | `before[dataset_item_id]` | Item-specific; receives merged context from `before_all` + `before_each` |
+| Tear down for EVERY scenario | `after_each` | Common cleanup without registering every item |
+| Tear down specific scenario resources | `after[dataset_item_id]` | Runs before `after_each`; item-specific cleanup |
 | Delete shared resources created in `before_all` | `after_all` | Run once after all scenarios finish |
 
 **Failure semantics to communicate to the user:**
 - If `before_all` fails → the entire run is marked failed; no scenarios execute
-- If `before[dataset_item_id]` fails for a scenario → that scenario is marked `prescript_failed`; other scenarios continue running
-- `after` / `after_all` failures are logged as warnings; they do not affect scenario or run status
+- If `before_each` or `before[dataset_item_id]` fails for a scenario → that scenario is marked `prescript_failed`; other scenarios continue running
+- `after` / `after_each` / `after_all` failures are logged as warnings; they do not affect scenario or run status
+- On before-hook failure, `after` / `after_each` still run and receive the furthest successfully built `setup_context` (e.g. `before_all` + `before_each` if item `before` failed)
 
 **Terminal-state behaviour of `prescript_failed`:**
 - `prescript_failed` is a **terminal status** — an item that reached it is complete. The SDK's polling loop correctly counts `prescript_failed` items as terminal and will not wait indefinitely for them.
@@ -507,6 +511,7 @@ balance_item = netra_create_dataset_item(...)  # returns {"id": "item-xyz-789", 
 # Step 2: Map hooks using the actual dataset_item_id values
 hooks = SimulationHooks(
     before_all=before_all,
+    before_each=before_each,  # optional: runs for every scenario
     before={
         "item-abc-123": setup_refund_scenario,  # Use actual ID from step 1
         "item-xyz-789": setup_balance_scenario,
@@ -515,6 +520,7 @@ hooks = SimulationHooks(
         "item-abc-123": teardown_refund_scenario,
         "item-xyz-789": teardown_balance_scenario,
     },
+    after_each=after_each,  # optional: runs for every scenario
     after_all=after_all,
 )
 ```
@@ -528,6 +534,7 @@ const balanceItem = /* netra_create_dataset_item(...) → { id: "item-xyz-789", 
 // Step 2: Map hooks using the actual datasetItemId values
 const hooks: SimulationHooks = {
   beforeAll,
+  beforeEach, // optional: runs for every scenario
   before: {
     "item-abc-123": setupRefundScenario,
     "item-xyz-789": setupBalanceScenario,
@@ -536,6 +543,7 @@ const hooks: SimulationHooks = {
     "item-abc-123": teardownRefundScenario,
     "item-xyz-789": teardownBalanceScenario,
   },
+  afterEach, // optional: runs for every scenario
   afterAll,
 };
 ```
@@ -561,15 +569,23 @@ For each hook identified, generate a scaffold in the **detected project language
 def before_all() -> dict | None:
     ...
 
-# before: dict keyed by dataset_item_id; each receives shared_context → returns dict (item context) or None
+# before_each: receives shared_context → returns dict merged into setup_context (runs for every item)
+def before_each(shared_context: dict | None) -> dict | None:
+    ...
+
+# before: dict keyed by dataset_item_id; each receives merged context (before_all + before_each)
 def setup_scenario_a(shared_context: dict | None) -> dict | None:
     ...
 
 def setup_scenario_b(shared_context: dict | None) -> dict | None:
     ...
 
-# after: dict keyed by dataset_item_id; each receives result + setup_context (merged before_all + before)
+# after: dict keyed by dataset_item_id; each receives result + setup_context
 def teardown_scenario_a(result: dict, setup_context: dict | None) -> None:
+    ...
+
+# after_each: receives result + setup_context (runs for every item, after item-specific after)
+def after_each(result: dict, setup_context: dict | None) -> None:
     ...
 
 # after_all: receives aggregated results dict and shared_context (before_all only) → returns None
@@ -588,7 +604,15 @@ async function beforeAll(): Promise<Record<string, any> | null | void> {
 }
 (beforeAll as any).description = "One-line description for the Netra UI.";
 
-// before: Record keyed by datasetItemId; each receives sharedContext → returns item context
+// beforeEach: receives sharedContext → returns dict merged into setupContext (every item)
+async function beforeEach(
+  sharedContext: Record<string, any> | null,
+): Promise<Record<string, any> | null | void> {
+  ...
+}
+(beforeEach as any).description = "One-line description for the Netra UI.";
+
+// before: Record keyed by datasetItemId; each receives merged context (beforeAll + beforeEach)
 async function setupScenarioA(
   sharedContext: Record<string, any> | null,
 ): Promise<Record<string, any> | null | void> {
@@ -604,6 +628,15 @@ async function teardownScenarioA(
   ...
 }
 (teardownScenarioA as any).description = "One-line description for the Netra UI.";
+
+// afterEach: receives result + setupContext (every item, after item-specific after)
+async function afterEach(
+  result: Record<string, any>,
+  setupContext: Record<string, any> | null,
+): Promise<void> {
+  ...
+}
+(afterEach as any).description = "One-line description for the Netra UI.";
 
 // afterAll: receives aggregated results and sharedContext (beforeAll only)
 async function afterAll(
@@ -621,30 +654,34 @@ async function afterAll(
 Python:
 ```
 before_all()                                      → shared_context (dict | None)
-hooks.before[dataset_item_id](shared_context)     → merged into setup_context
+before_each(shared_context)                       → merged into setup_context
+hooks.before[dataset_item_id](merged_context)     → merged into setup_context
 BaseTask.run(..., setup_context=...)              ← receives merged context
 hooks.after[dataset_item_id](result, setup_context)  ← same merged context for cleanup
+after_each(result, setup_context)                 ← same merged context
 after_all(results, shared_context)                ← run-level shared_context only
 ```
 
 TypeScript:
 ```
 beforeAll()                                       → sharedContext (Record | null)
-hooks.before[datasetItemId](sharedContext)        → merged into setupContext
+beforeEach(sharedContext)                         → merged into setupContext
+hooks.before[datasetItemId](mergedContext)        → merged into setupContext
 BaseTask.run(..., setupContext)                   ← receives merged context
 hooks.after[datasetItemId](result, setupContext)  ← same merged context for cleanup
+afterEach(result, setupContext)                   ← same merged context
 afterAll(results, sharedContext)                  ← run-level sharedContext only
 ```
 
-**Important:** The `before` and `after` hooks are dictionaries keyed by dataset item ID, not single functions. Each scenario that requires specific setup/teardown gets its own function, and these functions are registered in `SimulationHooks` using the stable dataset item ID as the key.
+**Important:** The `before` and `after` hooks are dictionaries keyed by dataset item ID, not single functions. Each scenario that requires specific setup/teardown gets its own function, and these functions are registered in `SimulationHooks` using the stable dataset item ID as the key. Prefer `before_each` / `after_each` when the same setup/teardown applies to every scenario.
 
-The setup context is the merge of shared context (from `before_all` / `beforeAll`) with any object returned by the item `before` hook. It is passed to both `BaseTask.run()` and the item `after` hook so teardown can clean up per-scenario resources (tokens, accounts, etc.). `after_all` / `afterAll` still receives only the run-level shared context.
+The setup context is the merge of `before_all` / `beforeAll` + `before_each` / `beforeEach` + any object returned by the item `before` hook. It is passed to `BaseTask.run()`, the item `after` hook, and `after_each` / `afterEach`. If a before hook fails mid-way, teardown still receives the furthest successfully built setup context. `after_all` / `afterAll` still receives only the run-level shared context.
 
 **Full Python scaffold example (employee + per-scenario auth pattern):**
 
 Assume dataset has two items:
-- `dataset_item_id = "item-refund-request"` → scenario requiring auth
-- `dataset_item_id = "item-balance-inquiry"` → scenario requiring auth
+- `dataset_item_id = "item-refund-request"` → needs shared auth + refund-specific account
+- `dataset_item_id = "item-balance-inquiry"` → needs shared auth only (`before_each` / `after_each` cover it)
 
 ```python
 from netra.simulation import BaseTask, SimulationHooks, TaskResult
@@ -658,33 +695,33 @@ def before_all():
     return {"employee_id": employee.id}
 
 
-def setup_refund_scenario(shared_context: dict | None):
-    """Obtain a fresh auth token for refund scenario."""
+def before_each(shared_context: dict | None):
+    """Obtain a fresh auth token before every scenario."""
     employee_id = (shared_context or {}).get("employee_id")
     # TODO: replace with your actual login logic
     token = your_api.login(employee_id=employee_id)
     return {"auth_token": token}
 
 
-def setup_balance_scenario(shared_context: dict | None):
-    """Obtain a fresh auth token for balance inquiry scenario."""
-    employee_id = (shared_context or {}).get("employee_id")
-    token = your_api.login(employee_id=employee_id)
-    return {"auth_token": token}
+def setup_refund_scenario(shared_context: dict | None):
+    """Create a refund account for the refund scenario only."""
+    # shared_context already includes employee_id + auth_token from before_all + before_each
+    refund_account = your_api.create_refund_account()
+    return {"refund_account_id": refund_account.id}
 
 
 def teardown_refund_scenario(result: dict, setup_context: dict | None):
-    """Log out after refund scenario regardless of outcome."""
-    auth_token = (setup_context or {}).get("auth_token")  # from merged before_all + before
+    """Delete the refund account after the refund scenario."""
+    refund_account_id = (setup_context or {}).get("refund_account_id")
     try:
-        your_api.logout(token=auth_token)
+        your_api.delete_refund_account(refund_account_id)
     except Exception:
         pass  # after failures are logged but do not affect scenario status
 
 
-def teardown_balance_scenario(result: dict, setup_context: dict | None):
-    """Log out after balance inquiry scenario."""
-    auth_token = (setup_context or {}).get("auth_token")
+def after_each(result: dict, setup_context: dict | None):
+    """Log out after every scenario regardless of outcome."""
+    auth_token = (setup_context or {}).get("auth_token")  # from furthest built setup_context
     try:
         your_api.logout(token=auth_token)
     except Exception:
@@ -701,14 +738,14 @@ def after_all(results: dict, shared_context: dict | None):
 # Map hooks to specific dataset item IDs
 hooks = SimulationHooks(
     before_all=before_all,
+    before_each=before_each,
     before={
         "item-refund-request": setup_refund_scenario,
-        "item-balance-inquiry": setup_balance_scenario,
     },
     after={
         "item-refund-request": teardown_refund_scenario,
-        "item-balance-inquiry": teardown_balance_scenario,
     },
+    after_each=after_each,
     after_all=after_all,
 )
 
@@ -762,7 +799,7 @@ async function beforeAll(): Promise<Record<string, any> | null> {
 (beforeAll as any).description =
   "Create the test employee and assign the admin role before any scenario runs.";
 
-async function setupRefundScenario(
+async function beforeEach(
   sharedContext: Record<string, any> | null,
 ): Promise<Record<string, any> | null> {
   const employeeId = sharedContext?.employeeId;
@@ -770,33 +807,33 @@ async function setupRefundScenario(
   const token = await yourApi.login({ employeeId });
   return { authToken: token };
 }
-(setupRefundScenario as any).description =
-  "Obtain a fresh auth token for refund scenario.";
+(beforeEach as any).description =
+  "Obtain a fresh auth token before every scenario.";
 
-async function setupBalanceScenario(
+async function setupRefundScenario(
   sharedContext: Record<string, any> | null,
 ): Promise<Record<string, any> | null> {
-  const employeeId = sharedContext?.employeeId;
-  const token = await yourApi.login({ employeeId });
-  return { authToken: token };
+  // sharedContext already includes employeeId + authToken from beforeAll + beforeEach
+  const refundAccount = await yourApi.createRefundAccount();
+  return { refundAccountId: refundAccount.id };
 }
-(setupBalanceScenario as any).description =
-  "Obtain a fresh auth token for balance inquiry scenario.";
+(setupRefundScenario as any).description =
+  "Create a refund account for the refund scenario only.";
 
 async function teardownRefundScenario(
   result: Record<string, any>,
   setupContext: Record<string, any> | null,
 ): Promise<void> {
   try {
-    await yourApi.logout({ token: setupContext?.authToken });
+    await yourApi.deleteRefundAccount(setupContext?.refundAccountId);
   } catch {
     // after failures are logged but do not affect scenario status
   }
 }
 (teardownRefundScenario as any).description =
-  "Log out after refund scenario regardless of outcome.";
+  "Delete the refund account after the refund scenario.";
 
-async function teardownBalanceScenario(
+async function afterEach(
   result: Record<string, any>,
   setupContext: Record<string, any> | null,
 ): Promise<void> {
@@ -806,8 +843,8 @@ async function teardownBalanceScenario(
     // ignore
   }
 }
-(teardownBalanceScenario as any).description =
-  "Log out after balance inquiry scenario.";
+(afterEach as any).description =
+  "Log out after every scenario regardless of outcome.";
 
 async function afterAll(
   results: Record<string, any>,
@@ -821,14 +858,14 @@ async function afterAll(
 
 const hooks: SimulationHooks = {
   beforeAll,
+  beforeEach,
   before: {
     "item-refund-request": setupRefundScenario,
-    "item-balance-inquiry": setupBalanceScenario,
   },
   after: {
     "item-refund-request": teardownRefundScenario,
-    "item-balance-inquiry": teardownBalanceScenario,
   },
+  afterEach,
   afterAll,
 };
 
@@ -877,17 +914,17 @@ When hooks are needed, list each hook type with a one-line description and speci
 ```
 **Hooks:**
 - `before_all` / `beforeAll`: Create shared test employee and assign admin role
+- `before_each` / `beforeEach`: Obtain a fresh auth token before every scenario
 - `before`: Per-scenario hooks keyed by dataset item ID:
-  - Refund Request scenario: Obtain auth token via login
-  - Balance Inquiry scenario: Obtain auth token via login
+  - Refund Request scenario: Create refund account
 - `after`: Per-scenario hooks keyed by dataset item ID:
-  - Refund Request scenario: Log out after scenario
-  - Balance Inquiry scenario: Log out after scenario
+  - Refund Request scenario: Delete refund account
+- `after_each` / `afterEach`: Log out after every scenario
 - `after_all` / `afterAll`: Delete the test employee
 ```
 
 In the Netra UI Conversation tab for a scenario:
-- `before_all` / `beforeAll` and `after_all` / `afterAll` appear for every scenario in that run (run-level metadata)
+- `before_all` / `beforeAll`, `before_each` / `beforeEach`, `after_each` / `afterEach`, and `after_all` / `afterAll` appear for every scenario in that run (run-level metadata)
 - `before` / `after` appear only when that scenario's dataset item ID was registered in the hooks dict (item-level metadata)
 
 **Important:** The actual dataset item ID values will only be available after creating the dataset items via MCP. In the generated scaffold code, use placeholder IDs (e.g., `"item-refund-request"`, `"item-balance-inquiry"`) and instruct the user to replace these with the actual IDs returned by `netra_create_dataset_item`.
@@ -940,8 +977,10 @@ If Turn Type = `multi` and hooks were identified in Phase 3g, include a **Hooks*
 {Either "Not required — scenarios are independent." OR a list like:}
 
 - `before_all` / `beforeAll`: {one-line description}
-- `before`: {one-line description}
-- `after`: {one-line description}
+- `before_each` / `beforeEach`: {one-line description, if used}
+- `before`: {one-line description, if used}
+- `after`: {one-line description, if used}
+- `after_each` / `afterEach`: {one-line description, if used}
 - `after_all` / `afterAll`: {one-line description}
 
 **Generated scaffold code** (requires user to fill in TODO sections; language = Phase 0.5 detection):
@@ -1056,7 +1095,7 @@ After outputting the plan, ask the user:
 > - Adjust variable mappings (where input/output/reference comes from)
 > - Change pass criteria or model
 > - Edit the dataset name or description
-> - Add, remove, or change hooks (before_all, before, after, after_all)
+> - Add, remove, or change hooks (before_all, before_each, before, after, after_each, after_all)
 >
 > When you're satisfied, say **"proceed"** and I'll create everything in Netra.
 
@@ -1558,7 +1597,7 @@ Bad:
 32. **Always run Phase 3g for multi-turn datasets.** Skipping the correlation analysis risks generating a plan that will produce incorrect results because parallel scenario execution collides on shared state (e.g., two scenarios trying to use the same record simultaneously).
 
 33. **Hooks live entirely on the user's side.** Scripts are never uploaded to or stored by Netra. At run creation the SDK sends lightweight descriptors (`lifecycleHooks`) only:
-    - `beforeAll` / `afterAll` → stored on the test run (shown on every scenario in that run)
+    - `beforeAll` / `beforeEach` / `afterEach` / `afterAll` → stored on the test run (shown on every scenario in that run)
     - `before` / `after` per `datasetItemId` → stored on each matching test run item (shown only on that scenario's Conversation tab)
     The generated scaffold code belongs in the user's codebase, not in the Netra dataset configuration. Always key `SimulationHooks.before` / `after` by real dataset item ID values so the correct scenario UI shows the correct pre/post script.
 
@@ -1566,28 +1605,28 @@ Bad:
 
 35. **Never suggest sequential execution as a workaround for correlation.** Sequential execution (`max_concurrency=1` / `maxConcurrency: 1`) prevents collisions but means a single scenario failure blocks all subsequent ones. Hooks are the correct solution.
 
-36. **`before_all` / `beforeAll` failure is fatal for the entire run.** If the setup code raises, no scenarios run and the run is marked failed. `after_all` / `afterAll` still runs for cleanup. Only put truly required global setup in `beforeAll`. Optional or per-scenario setup belongs in `before`.
+36. **`before_all` / `beforeAll` failure is fatal for the entire run.** If the setup code raises, no scenarios run and the run is marked failed. Only put truly required global setup in `beforeAll`. Common per-item setup belongs in `before_each` / `beforeEach`. Optional or scenario-specific setup belongs in `before`.
 
-37. **`after` and `after_all` / `afterAll` must be robust.** These hooks run even when scenarios fail (and `afterAll` also runs when `beforeAll` fails). Wrap risky cleanup logic in try/except (Python) or try/catch (TypeScript) so a teardown error does not obscure the actual scenario failure reason.
+37. **`after`, `after_each` / `afterEach`, and `after_all` / `afterAll` must be robust.** These hooks run even when scenarios fail (including when `before` / `before_each` fails). Wrap risky cleanup logic in try/except (Python) or try/catch (TypeScript) so a teardown error does not obscure the actual scenario failure reason.
 
-38. **Setup context is how hooks share data with `BaseTask.run()` and item `after` hooks.** The object returned by `before_all` / `beforeAll` and `before` is merged and passed as `setup_context` / `setupContext` to every call of `BaseTask.run()` for that scenario, and again to the item `after` hook for cleanup. Generated scaffolding must use `after(result, setup_context)` / `after(result, setupContext)` — not shared context alone — so teardown can access item-level keys (tokens, accounts). The task must declare the setup-context parameter in its `run()` signature to receive it. Existing tasks that do not declare it continue to work (backwards compatible). `after_all` / `afterAll` still receives only the run-level shared context from `beforeAll`.
+38. **Setup context is how hooks share data with `BaseTask.run()` and teardown hooks.** The objects returned by `before_all` / `beforeAll`, `before_each` / `beforeEach`, and item `before` are merged into `setup_context` / `setupContext` and passed to `BaseTask.run()`, item `after`, and `after_each` / `afterEach`. If a before hook fails mid-way, teardown still receives the furthest successfully built setup context (so `after_each` can clean up what `before_each` created even if item `before` failed). Generated scaffolding must use `after(result, setup_context)` / `after(result, setupContext)` — not shared context alone. The task must declare the setup-context parameter in its `run()` signature to receive it. Existing tasks that do not declare it continue to work (backwards compatible). `after_all` / `afterAll` still receives only the run-level shared context from `beforeAll`, but its `results` include setup/first-turn failures as well as conversation failures.
 
 39. **Always include a `hooks` usage example in the generated scaffold code** when hooks are recommended. The example must match the detected language and show:
-    - The `SimulationHooks` instantiation with all recommended hooks wired
+    - The `SimulationHooks` instantiation with all recommended hooks wired (`before_each` / `after_each` when common per-item setup/teardown applies)
     - A `BaseTask.run()` that accepts and uses `setup_context` / `setupContext`
     - The simulation run call with `hooks` (`run_simulation(..., hooks=hooks)` or `runSimulation({ ..., hooks })`)
     - Hook descriptions on **every** function:
       - Python: a docstring on each hook
       - TypeScript: `(fn as any).description = "..."` on each hook (required; ≤ 200 chars). Never ship TypeScript hooks without descriptions — the SDK otherwise sends `description: null` in `lifecycleHooks`.
 
-40. **Clearly communicate the `prescript_failed` status to the user.** When a `before` hook fails for a specific scenario, the test run item's status is set to `prescript_failed` rather than `failed`. Key properties of this status:
+40. **Clearly communicate the `prescript_failed` status to the user.** When a `before_each` or `before` hook fails for a specific scenario, the test run item's status is set to `prescript_failed` rather than `failed`. Key properties of this status:
     - Visible in the Netra dashboard — distinguishes setup failures from actual agent failures
     - **Terminal**: the SDK polling loop treats `prescript_failed` as done; the run will not hang waiting for the item
     - **Eval suppressed**: `evalStatus` is set to `NOT_AVAILABLE` immediately — no evaluators run for that item
     - **Stable**: a `prescript_failed` item's status cannot be overwritten by bulk-failure sweeps (e.g. on run timeout)
     - **Evaluation roll-up**: if every item in the run ends as `failed` or `prescript_failed`, the run's evaluation status is `NOT_AVAILABLE`
 
-41. **Also sync TypeScript simulation guidance** with `netra-best-practices/references/typescript/simulation.md` when updating hook behavior. Python guidance lives in `references/python/simulation.md`. Keep both languages at feature parity for hooks, including description/docstring requirements.
+41. **Also sync TypeScript simulation guidance** with `netra-best-practices/references/typescript/simulation.md` when updating hook behavior. Python guidance lives in `references/python/simulation.md`. Keep both languages at feature parity for hooks, including `before_each` / `beforeEach`, `after_each` / `afterEach`, progressive setup context on failure, and description/docstring requirements.
 
 ## Reference
 
