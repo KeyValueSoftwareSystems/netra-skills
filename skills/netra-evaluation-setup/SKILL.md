@@ -63,7 +63,7 @@ Language-specific conventions for this skill:
 | Evaluation API | `Netra.evaluation.run_test_suite(...)` | `await Netra.evaluation.runTestSuite({...})` |
 | Hook fields | `before_all`, `before_each`, `before`, `after`, `after_each`, `after_all`, `setup_context`, `session_id`, `dataset_item_id` | `beforeAll`, `beforeEach`, `before`, `after`, `afterEach`, `afterAll`, `setupContext`, `sessionId`, `datasetItemId` |
 | Hooks object | `SimulationHooks(before_all=..., before_each=..., before={...})` | `const hooks: SimulationHooks = { beforeAll: ..., beforeEach: ..., before: {...} }` |
-| Hook descriptions | Python docstring on the function (**required**) | `(fn as any).description = "..."` on **every** hook function (**required**, ≤ 200 chars; no runtime docstrings) |
+| Hook descriptions | `fn.description = "..."` on **every** hook function (**required**, ≤ 200 chars) | `(fn as any).description = "..."` on **every** hook function (**required**, ≤ 200 chars) |
 
 ### Phase 1: Ingest the Specification
 
@@ -552,15 +552,15 @@ const hooks: SimulationHooks = {
 
 For each hook identified, generate a scaffold in the **detected project language** (Phase 0.5) with:
 - The function signature matching the required hook level
-- A short description of what the hook does:
-  - Python: a docstring on **every** hook function
-  - TypeScript: `(fn as any).description = "..."` on **every** hook function (≤ 200 chars). Never omit this — without it the Netra UI gets `description: null`.
+- A short description of what the hook does, set via `.description` on **every** hook function (≤ 200 chars). Never omit this — without it the Netra UI gets `description: null`.
+  - Python: `fn.description = "..."`
+  - TypeScript: `(fn as any).description = "..."`
 - Placeholder for the actual implementation (marked with `# TODO` / `// TODO`)
 - The `SimulationHooks` wiring
 - The updated simulation run call passing `hooks`
 
 **Do not generate Python scaffolds for a TypeScript project, or vice versa.**
-**Do not generate TypeScript hooks without `.description` attached.**
+**Do not generate hooks without `.description` attached.**
 
 **Python hook function signatures:**
 
@@ -568,32 +568,41 @@ For each hook identified, generate a scaffold in the **detected project language
 # before_all: no args → returns dict (shared context) or None
 def before_all() -> dict | None:
     ...
+before_all.description = "One-line description for the Netra UI."
 
 # before_each: receives shared_context → returns dict merged into setup_context (runs for every item)
 def before_each(shared_context: dict | None) -> dict | None:
     ...
+before_each.description = "One-line description for the Netra UI."
 
 # before: dict keyed by dataset_item_id; each receives merged context (before_all + before_each)
 def setup_scenario_a(shared_context: dict | None) -> dict | None:
     ...
+setup_scenario_a.description = "One-line description for the Netra UI."
 
 def setup_scenario_b(shared_context: dict | None) -> dict | None:
     ...
+setup_scenario_b.description = "One-line description for the Netra UI."
 
 # after: dict keyed by dataset_item_id; each receives result + setup_context
 def teardown_scenario_a(result: dict, setup_context: dict | None) -> None:
     ...
+teardown_scenario_a.description = "One-line description for the Netra UI."
 
 # after_each: receives result + setup_context (runs for every item, after item-specific after)
 def after_each(result: dict, setup_context: dict | None) -> None:
     ...
+after_each.description = "One-line description for the Netra UI."
 
 # after_all: receives aggregated results dict and shared_context (before_all only) → returns None
 def after_all(results: dict, shared_context: dict | None) -> None:
     ...
+after_all.description = "One-line description for the Netra UI."
 ```
 
 All Python hooks can be async (`async def`) if the user's setup code is async.
+
+**Required:** every Python hook above must set `.description`. Omitting it sends `description: null` in `lifecycleHooks`.
 
 **TypeScript hook function signatures:**
 
@@ -689,50 +698,56 @@ from netra.simulation import BaseTask, SimulationHooks, TaskResult
 # ---- Hooks ----
 
 def before_all():
-    """Create the test employee and assign the admin role before any scenario runs."""
     # TODO: replace with your actual setup code
     employee = your_api.create_employee(name="Test User", role="admin")
     return {"employee_id": employee.id}
+before_all.description = (
+    "Create the test employee and assign the admin role before any scenario runs."
+)
 
 
 def before_each(shared_context: dict | None):
-    """Obtain a fresh auth token before every scenario."""
     employee_id = (shared_context or {}).get("employee_id")
     # TODO: replace with your actual login logic
     token = your_api.login(employee_id=employee_id)
     return {"auth_token": token}
+before_each.description = "Obtain a fresh auth token before every scenario."
 
 
 def setup_refund_scenario(shared_context: dict | None):
-    """Create a refund account for the refund scenario only."""
     # shared_context already includes employee_id + auth_token from before_all + before_each
     refund_account = your_api.create_refund_account()
     return {"refund_account_id": refund_account.id}
+setup_refund_scenario.description = (
+    "Create a refund account for the refund scenario only."
+)
 
 
 def teardown_refund_scenario(result: dict, setup_context: dict | None):
-    """Delete the refund account after the refund scenario."""
     refund_account_id = (setup_context or {}).get("refund_account_id")
     try:
         your_api.delete_refund_account(refund_account_id)
     except Exception:
         pass  # after failures are logged but do not affect scenario status
+teardown_refund_scenario.description = (
+    "Delete the refund account after the refund scenario."
+)
 
 
 def after_each(result: dict, setup_context: dict | None):
-    """Log out after every scenario regardless of outcome."""
     auth_token = (setup_context or {}).get("auth_token")  # from furthest built setup_context
     try:
         your_api.logout(token=auth_token)
     except Exception:
         pass
+after_each.description = "Log out after every scenario regardless of outcome."
 
 
 def after_all(results: dict, shared_context: dict | None):
-    """Delete the test employee once all scenarios have finished."""
     employee_id = (shared_context or {}).get("employee_id")
     # TODO: replace with your actual teardown code
     your_api.delete_employee(employee_id=employee_id)
+after_all.description = "Delete the test employee once all scenarios have finished."
 
 
 # Map hooks to specific dataset item IDs
@@ -1615,9 +1630,10 @@ Bad:
     - The `SimulationHooks` instantiation with all recommended hooks wired (`before_each` / `after_each` when common per-item setup/teardown applies)
     - A `BaseTask.run()` that accepts and uses `setup_context` / `setupContext`
     - The simulation run call with `hooks` (`run_simulation(..., hooks=hooks)` or `runSimulation({ ..., hooks })`)
-    - Hook descriptions on **every** function:
-      - Python: a docstring on each hook
-      - TypeScript: `(fn as any).description = "..."` on each hook (required; ≤ 200 chars). Never ship TypeScript hooks without descriptions — the SDK otherwise sends `description: null` in `lifecycleHooks`.
+    - Hook descriptions on **every** function via `.description` (required; ≤ 200 chars):
+      - Python: `fn.description = "..."`
+      - TypeScript: `(fn as any).description = "..."`
+      Never ship hooks without descriptions — the SDK otherwise sends `description: null` in `lifecycleHooks`.
 
 40. **Clearly communicate the `prescript_failed` status to the user.** When a `before_each` or `before` hook fails for a specific scenario, the test run item's status is set to `prescript_failed` rather than `failed`. Key properties of this status:
     - Visible in the Netra dashboard — distinguishes setup failures from actual agent failures
@@ -1626,7 +1642,7 @@ Bad:
     - **Stable**: a `prescript_failed` item's status cannot be overwritten by bulk-failure sweeps (e.g. on run timeout)
     - **Evaluation roll-up**: if every item in the run ends as `failed` or `prescript_failed`, the run's evaluation status is `NOT_AVAILABLE`
 
-41. **Also sync TypeScript simulation guidance** with `netra-best-practices/references/typescript/simulation.md` when updating hook behavior. Python guidance lives in `references/python/simulation.md`. Keep both languages at feature parity for hooks, including `before_each` / `beforeEach`, `after_each` / `afterEach`, progressive setup context on failure, and description/docstring requirements.
+41. **Also sync TypeScript simulation guidance** with `netra-best-practices/references/typescript/simulation.md` when updating hook behavior. Python guidance lives in `references/python/simulation.md`. Keep both languages at feature parity for hooks, including `before_each` / `beforeEach`, `after_each` / `afterEach`, progressive setup context on failure, and `.description` requirements.
 
 ## Reference
 
