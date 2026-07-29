@@ -39,11 +39,14 @@ Netra.init(
 Subclass `BaseTask` and implement `run()`. The method can be sync or async.
 
 ```python
+from netra import Netra
 from netra.simulation import BaseTask, TaskResult
 
 class MyAgentTask(BaseTask):
     def run(self, message, session_id=None, files=None, setup_context=None):
+        Netra.set_root_input(message)
         response = my_agent.chat(message, session_id=session_id)
+        Netra.set_root_output(response.text)
         return TaskResult(
             message=response.text,
             session_id=response.session_id or session_id or "default",
@@ -83,7 +86,9 @@ def run(
 ```python
 class MyAsyncTask(BaseTask):
     async def run(self, message, session_id=None, files=None, setup_context=None):
+        Netra.set_root_input(message)
         response = await my_async_agent.chat(message, session_id=session_id)
+        Netra.set_root_output(response.text)
         return TaskResult(
             message=response.text,
             session_id=response.session_id or session_id or "default",
@@ -93,14 +98,17 @@ class MyAsyncTask(BaseTask):
 ### Task with file handling
 
 ```python
+from netra import Netra
 from netra.simulation import BaseTask, TaskResult, ProcessedFile
 
 class FileTask(BaseTask):
     def run(self, message, session_id=None, files=None, setup_context=None):
+        Netra.set_root_input(message)
         if files:
             for f in files:
                 print(f.file_name, f.content_type, len(f.data))
         response = my_agent.chat(message, session_id=session_id, files=files)
+        Netra.set_root_output(response.text)
         return TaskResult(
             message=response.text,
             session_id=response.session_id or session_id or "default",
@@ -331,14 +339,15 @@ When `hooks` are passed, lightweight descriptors (function name and docstring) a
 1. `Netra.init()` is called before accessing `Netra.simulation`.
 2. `NETRA_API_KEY` and `NETRA_OTLP_ENDPOINT` are set.
 3. Task's `run()` always returns a `TaskResult` with both `message` and `session_id`.
-4. `Netra.shutdown()` is called on graceful termination.
-5. When using hooks: `before_all` returns a `dict` or `None` (other types are ignored).
-6. When using hooks: `before_each` receives `shared_context` and returns `dict` or `None`; runs for every item.
-7. When using hooks: `before` dict values (functions) receive the merged context from `before_all` + `before_each` and return `dict` or `None`.
-8. When using hooks: `after` / `after_each` receive `result` and `setup_context` (merged `before_all` + `before_each` + item `before`); return value is ignored. They also run when the scenario fails, exceeds max turns, or a before hook fails (with the furthest successfully built `setup_context`).
-9. When using hooks: `after_all` should not raise — wrap risky cleanup in try/except. Its `results` include setup/first-turn failures as well as conversation failures.
-10. Hook dict keys must match `dataset_item_id` values from your dataset.
-11. A `prescript_failed` scenario is **terminal** — the SDK polling loop will not wait for it. Its `evalStatus` is set to `NOT_AVAILABLE` automatically and it cannot be overwritten by a timeout sweep. If all scenarios end as `failed` or `prescript_failed`, the run's evaluation status resolves to `NOT_AVAILABLE`.
+4. Task's `run()` calls `Netra.set_root_input(message)` at the start and `Netra.set_root_output(response)` before returning.
+5. `Netra.shutdown()` is called on graceful termination.
+6. When using hooks: `before_all` returns a `dict` or `None` (other types are ignored).
+7. When using hooks: `before_each` receives `shared_context` and returns `dict` or `None`; runs for every item.
+8. When using hooks: `before` dict values (functions) receive the merged context from `before_all` + `before_each` and return `dict` or `None`.
+9. When using hooks: `after` / `after_each` receive `result` and `setup_context` (merged `before_all` + `before_each` + item `before`); return value is ignored. They also run when the scenario fails, exceeds max turns, or a before hook fails (with the furthest successfully built `setup_context`).
+10. When using hooks: `after_all` should not raise — wrap risky cleanup in try/except. Its `results` include setup/first-turn failures as well as conversation failures.
+11. Hook dict keys must match `dataset_item_id` values from your dataset.
+12. A `prescript_failed` scenario is **terminal** — the SDK polling loop will not wait for it. Its `evalStatus` is set to `NOT_AVAILABLE` automatically and it cannot be overwritten by a timeout sweep. If all scenarios end as `failed` or `prescript_failed`, the run's evaluation status resolves to `NOT_AVAILABLE`.
 
 ## References
 

@@ -90,16 +90,20 @@ const dataset = { items: fetched!.items };
 A function receiving a single dataset item's `input` and returning the output. Can be sync or async.
 
 ```typescript
+import { Netra } from "netra-sdk";
 import OpenAI from "openai";
 
 const client = new OpenAI();
 
 async function myTask(input: any): Promise<string> {
+  Netra.setRootInput(input);
   const response = await client.chat.completions.create({
     model: "gpt-4o",
     messages: [{ role: "user", content: input }],
   });
-  return response.choices[0].message.content!;
+  const output = response.choices[0].message.content!;
+  Netra.setRootOutput(output);
+  return output;
 }
 ```
 
@@ -187,11 +191,14 @@ await Netra.init({
 const client = new OpenAI();
 
 async function qaTask(input: any): Promise<string> {
+  Netra.setRootInput(input);
   const response = await client.chat.completions.create({
     model: "gpt-4o",
     messages: [{ role: "user", content: input }],
   });
-  return response.choices[0].message.content!;
+  const output = response.choices[0].message.content!;
+  Netra.setRootOutput(output);
+  return output;
 }
 
 const containsExpected = {
@@ -239,7 +246,8 @@ await Netra.shutdown();
 2. `NETRA_API_KEY` and `NETRA_OTLP_ENDPOINT` environment variables are set.
 3. Every dataset item has a non-empty `input`.
 4. The task function accepts a single argument and returns the output.
-5. Evaluator `.evaluate()` returns an object with `evaluatorName` matching `config.name`.
+5. The task function calls `Netra.setRootInput(input)` at the start and `Netra.setRootOutput(output)` before returning.
+6. Evaluator `.evaluate()` returns an object with `evaluatorName` matching `config.name`.
 6. `await Netra.shutdown()` is called on graceful termination.
 
 ## References

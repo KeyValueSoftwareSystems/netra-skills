@@ -38,7 +38,7 @@ await Netra.init({
 Extend the `BaseTask` abstract class and implement `run()`:
 
 ```typescript
-import { BaseTask } from "netra-sdk";
+import { BaseTask, Netra } from "netra-sdk";
 import type { TaskResult } from "netra-sdk";
 
 class MyAgentTask extends BaseTask {
@@ -48,7 +48,9 @@ class MyAgentTask extends BaseTask {
     files?: ProcessedFile[] | null,
     setupContext?: Record<string, any> | null,
   ): Promise<TaskResult> {
+    Netra.setRootInput(message);
     const response = await myAgent.chat(message, { sessionId });
+    Netra.setRootOutput(response.text);
     return {
       message: response.text,
       sessionId: response.sessionId || sessionId || "default",
@@ -106,12 +108,14 @@ class FileTask extends BaseTask {
     files?: ProcessedFile[] | null,
     setupContext?: Record<string, any> | null,
   ): Promise<TaskResult> {
+    Netra.setRootInput(message);
     if (files?.length) {
       for (const f of files) {
         console.log(f.fileName, f.contentType, f.data.length);
       }
     }
     const response = await myAgent.chat(message, { sessionId, files });
+    Netra.setRootOutput(response.text);
     return {
       message: response.text,
       sessionId: response.sessionId || sessionId || "default",
@@ -432,15 +436,16 @@ Always set `.description` on TypeScript hooks so the UI is as informative as Pyt
 1. `await Netra.init()` is called before accessing `Netra.simulation`.
 2. `NETRA_API_KEY` and `NETRA_OTLP_ENDPOINT` are set.
 3. Task's `run()` always returns a `TaskResult` with both `message` and `sessionId`.
-4. `await Netra.shutdown()` is called on graceful termination.
-5. When using hooks: `beforeAll` returns a plain object or `null`/`undefined` (other types are ignored).
-6. When using hooks: `beforeEach` receives `sharedContext` and returns a plain object or `null`/`undefined`; runs for every item.
-7. When using hooks: `before` dict values receive the merged context from `beforeAll` + `beforeEach` and return a plain object or `null`/`undefined`.
-8. When using hooks: `after` / `afterEach` receive `result` and `setupContext` (merged `beforeAll` + `beforeEach` + item `before`); return value is ignored. They also run when the scenario fails, exceeds max turns, or a before hook fails (with the furthest successfully built `setupContext`).
-9. When using hooks: `afterAll` should not throw — wrap risky cleanup in try/catch. Its `results` include setup/first-turn failures as well as conversation failures.
-10. Hook dict keys must match `datasetItemId` values from your dataset.
-11. When using hooks: every hook function has `(fn as any).description = "..."` set (≤ 200 chars).
-12. A `prescript_failed` scenario is **terminal** — the SDK polling loop will not wait for it. Its `evalStatus` is set to `NOT_AVAILABLE` automatically and it cannot be overwritten by a timeout sweep. If all scenarios end as `failed` or `prescript_failed`, the run's evaluation status resolves to `NOT_AVAILABLE`.
+4. Task's `run()` calls `Netra.setRootInput(message)` at the start and `Netra.setRootOutput(response)` before returning.
+5. `await Netra.shutdown()` is called on graceful termination.
+6. When using hooks: `beforeAll` returns a plain object or `null`/`undefined` (other types are ignored).
+7. When using hooks: `beforeEach` receives `sharedContext` and returns a plain object or `null`/`undefined`; runs for every item.
+8. When using hooks: `before` dict values receive the merged context from `beforeAll` + `beforeEach` and return a plain object or `null`/`undefined`.
+9. When using hooks: `after` / `afterEach` receive `result` and `setupContext` (merged `beforeAll` + `beforeEach` + item `before`); return value is ignored. They also run when the scenario fails, exceeds max turns, or a before hook fails (with the furthest successfully built `setupContext`).
+10. When using hooks: `afterAll` should not throw — wrap risky cleanup in try/catch. Its `results` include setup/first-turn failures as well as conversation failures.
+11. Hook dict keys must match `datasetItemId` values from your dataset.
+12. When using hooks: every hook function has `(fn as any).description = "..."` set (≤ 200 chars).
+13. A `prescript_failed` scenario is **terminal** — the SDK polling loop will not wait for it. Its `evalStatus` is set to `NOT_AVAILABLE` automatically and it cannot be overwritten by a timeout sweep. If all scenarios end as `failed` or `prescript_failed`, the run's evaluation status resolves to `NOT_AVAILABLE`.
 
 ## References
 
