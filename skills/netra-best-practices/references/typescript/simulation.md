@@ -224,7 +224,7 @@ All hooks can be sync or async (`Promise`-returning).
 
 ### Hook descriptions (required for Netra UI)
 
-TypeScript has no runtime docstrings. The SDK reads an optional string property on each hook function:
+Set a `.description` property on each hook function (same pattern as the Python SDK):
 
 ```typescript
 (fn as any).description = "Short explanation shown in the Netra UI";
@@ -234,24 +234,6 @@ Rules:
 - Attach `.description` on **every** configured hook (`beforeAll`, `beforeEach`, each `before`/`after` entry, `afterEach`, `afterAll`).
 - Keep it to one short sentence; the SDK truncates to **200 characters**.
 - Without `.description`, the backend still receives `configured: true` and `name`, but `description` is `null` and the UI has less context.
-- This is the TypeScript equivalent of a Python hook docstring.
-
-Helper pattern (optional):
-
-```typescript
-function withDescription<T extends (...args: any[]) => any>(
-  fn: T,
-  description: string,
-): T {
-  (fn as any).description = description;
-  return fn;
-}
-
-const setupEnvironment = withDescription(function setupEnvironment() {
-  const user = api.createUser({ name: "Test User" });
-  return { userId: user.id };
-}, "Create a test user before any scenario runs.");
-```
 
 ### Example — Item-specific setup for particular scenarios
 
@@ -422,12 +404,12 @@ All hooks are optional. Omit any you don't need.
 
 When `hooks` are passed, lightweight descriptors are sent to the backend as `lifecycleHooks`:
 - `name` — from `fn.name`
-- `description` — from `fn.description` (TypeScript) or the function docstring (Python)
+- `description` — from `fn.description` (truncated to 200 characters)
 - `configured: true`
 
 The Netra dashboard shows which hook types are configured on the test run (e.g. "Has pre-script" badge) and can display the description text. The actual script code is never stored by Netra.
 
-Always set `.description` on TypeScript hooks so the UI is as informative as Python docstring-backed hooks.
+Always set `.description` on every hook so the UI has useful context.
 
 ---
 
