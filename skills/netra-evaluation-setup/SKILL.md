@@ -484,7 +484,8 @@ For each detected correlation pattern, decide which hook level to use:
 **Failure semantics to communicate to the user:**
 - If `before_all` fails → the entire run is marked failed; no scenarios execute
 - If `before_each` or `before[dataset_item_id]` fails for a scenario → that scenario is marked `prescript_failed`; other scenarios continue running
-- `after` / `after_each` / `after_all` failures are logged as warnings; they do not affect scenario or run status
+- If `after` / `after_each` fails on an otherwise-successful scenario → that scenario is marked `postscript_failed` (both always attempt to run; errors are combined). If the scenario already failed/`prescript_failed`, the existing status is preserved
+- If `after_all` fails → successfully completed scenarios are marked `postscript_failed`; already-failed/`prescript_failed` items keep their status
 - On before-hook failure, `after` / `after_each` still run and receive the furthest successfully built `setup_context` (e.g. `before_all` + `before_each` if item `before` failed)
 
 **Terminal-state behaviour of `prescript_failed`:**
@@ -492,6 +493,12 @@ For each detected correlation pattern, decide which hook level to use:
 - A `prescript_failed` item also has its `evalStatus` immediately set to `NOT_AVAILABLE` — evaluators are never queued for an item whose agent never ran.
 - If **all** items end in either `failed` or `prescript_failed` (with no successfully completed items), the run's overall evaluation status resolves to `NOT_AVAILABLE`.
 - A `prescript_failed` item's status is stable — it will never be overwritten by a subsequent bulk-failure sweep (e.g. on run timeout).
+
+**Terminal-state behaviour of `postscript_failed`:**
+- `postscript_failed` is a **terminal status** — the conversation completed, but teardown failed.
+- Eval is **not** suppressed — evaluators from the completed conversation remain valid.
+- `postscript_failed` is excluded from the “all failed → NOT_AVAILABLE” roll-up (unlike `prescript_failed`).
+- Status is stable — it will never be overwritten by a subsequent bulk-failure sweep.
 
 **How to determine dataset item IDs for hook mapping:**
 
@@ -728,7 +735,7 @@ def teardown_refund_scenario(result: dict, setup_context: dict | None):
     try:
         your_api.delete_refund_account(refund_account_id)
     except Exception:
-        pass  # after failures are logged but do not affect scenario status
+        pass  # catch locally so teardown errors do not mark the item postscript_failed
 teardown_refund_scenario.description = (
     "Delete the refund account after the refund scenario."
 )
@@ -842,7 +849,7 @@ async function teardownRefundScenario(
   try {
     await yourApi.deleteRefundAccount(setupContext?.refundAccountId);
   } catch {
-    // after failures are logged but do not affect scenario status
+    // Catch locally so teardown errors do not mark the item postscript_failed
   }
 }
 (teardownRefundScenario as any).description =
@@ -1614,6 +1621,7 @@ Bad:
 33. **Hooks live entirely on the user's side.** Scripts are never uploaded to or stored by Netra. At run creation the SDK sends lightweight descriptors (`lifecycleHooks`) only:
     - `beforeAll` / `beforeEach` / `afterEach` / `afterAll` → stored on the test run (shown on every scenario in that run)
     - `before` / `after` per `datasetItemId` → stored on each matching test run item (shown only on that scenario's Conversation tab)
+    The Netra UI renders these in collapsible **Pre-script** / **Post-script** panels on the multi-turn Scenario Conversation tab (snake_case labels, with `name` + `description`). There is no run-level "Has pre-script" badge.
     The generated scaffold code belongs in the user's codebase, not in the Netra dataset configuration. Always key `SimulationHooks.before` / `after` by real dataset item ID values so the correct scenario UI shows the correct pre/post script.
 
 34. **Never collapse correlated scenarios into a single large item to avoid hooks.** Merging related scenarios degrades evaluator accuracy (session evaluators score the entire conversation — a merged scenario is harder to judge) and makes the dataset harder to maintain. Recommend hooks instead.
@@ -1622,7 +1630,7 @@ Bad:
 
 36. **`before_all` / `beforeAll` failure is fatal for the entire run.** If the setup code raises, no scenarios run and the run is marked failed. Only put truly required global setup in `beforeAll`. Common per-item setup belongs in `before_each` / `beforeEach`. Optional or scenario-specific setup belongs in `before`.
 
-37. **`after`, `after_each` / `afterEach`, and `after_all` / `afterAll` must be robust.** These hooks run even when scenarios fail (including when `before` / `before_each` fails). Wrap risky cleanup logic in try/except (Python) or try/catch (TypeScript) so a teardown error does not obscure the actual scenario failure reason.
+37. **`after`, `after_each` / `afterEach`, and `after_all` / `afterAll` must be robust.** These hooks run even when scenarios fail (including when `before` / `before_each` fails). Wrap risky cleanup logic in try/except (Python) or try/catch (TypeScript). A teardown error on an otherwise-successful item marks it `postscript_failed` (eval results are kept). Prefer resilient teardown so cleanup failures do not obscure a successful conversation.
 
 38. **Setup context is how hooks share data with `BaseTask.run()` and teardown hooks.** The objects returned by `before_all` / `beforeAll`, `before_each` / `beforeEach`, and item `before` are merged into `setup_context` / `setupContext` and passed to `BaseTask.run()`, item `after`, and `after_each` / `afterEach`. If a before hook fails mid-way, teardown still receives the furthest successfully built setup context (so `after_each` can clean up what `before_each` created even if item `before` failed). Generated scaffolding must use `after(result, setup_context)` / `after(result, setupContext)` — not shared context alone. The task must declare the setup-context parameter in its `run()` signature to receive it. Existing tasks that do not declare it continue to work (backwards compatible). `after_all` / `afterAll` still receives only the run-level shared context from `beforeAll`, but its `results` include setup/first-turn failures as well as conversation failures.
 
@@ -1636,13 +1644,21 @@ Bad:
       Never ship hooks without descriptions — the SDK otherwise sends `description: null` in `lifecycleHooks`.
 
 40. **Clearly communicate the `prescript_failed` status to the user.** When a `before_each` or `before` hook fails for a specific scenario, the test run item's status is set to `prescript_failed` rather than `failed`. Key properties of this status:
-    - Visible in the Netra dashboard — distinguishes setup failures from actual agent failures
+    - Visible in the Netra dashboard as **Prescript Failed** — distinguishes setup failures from actual agent failures
     - **Terminal**: the SDK polling loop treats `prescript_failed` as done; the run will not hang waiting for the item
     - **Eval suppressed**: `evalStatus` is set to `NOT_AVAILABLE` immediately — no evaluators run for that item
     - **Stable**: a `prescript_failed` item's status cannot be overwritten by bulk-failure sweeps (e.g. on run timeout)
     - **Evaluation roll-up**: if every item in the run ends as `failed` or `prescript_failed`, the run's evaluation status is `NOT_AVAILABLE`
 
-41. **Also sync TypeScript simulation guidance** with `netra-best-practices/references/typescript/simulation.md` when updating hook behavior. Python guidance lives in `references/python/simulation.md`. Keep both languages at feature parity for hooks, including `before_each` / `beforeEach`, `after_each` / `afterEach`, progressive setup context on failure, and `.description` requirements.
+41. **Clearly communicate the `postscript_failed` status to the user.** When an `after` / `after_each` / `after_all` hook fails on an otherwise-successful scenario, the item is marked `postscript_failed`. Key properties:
+    - Visible in the Netra dashboard as **Postscript Failed**
+    - **Terminal**: counted as done by the SDK polling loop
+    - **Eval not suppressed**: conversation evaluations remain valid
+    - **Stable**: cannot be overwritten by bulk-failure sweeps
+    - **Evaluation roll-up**: excluded from the “all failed → NOT_AVAILABLE” check (unlike `prescript_failed`)
+    - Already-failed / `prescript_failed` items are never overwritten with `postscript_failed`
+
+42. **Also sync TypeScript simulation guidance** with `netra-best-practices/references/typescript/simulation.md` when updating hook behavior. Python guidance lives in `references/python/simulation.md`. Keep both languages at feature parity for hooks, including `before_each` / `beforeEach`, `after_each` / `afterEach`, `postscript_failed`, progressive setup context on failure, and `.description` requirements.
 
 ## Reference
 

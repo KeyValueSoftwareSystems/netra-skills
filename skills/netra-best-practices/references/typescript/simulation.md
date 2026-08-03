@@ -176,9 +176,9 @@ Hooks are defined on the **SDK side** — the actual scripts never leave your en
 | `beforeAll` | Once, before any scenario starts | Entire run is marked failed; no scenarios execute |
 | `beforeEach` | Before every scenario | That scenario is marked `prescript_failed` (terminal; eval suppressed); others continue |
 | `before` | Before specific scenarios only (keyed by `datasetItemId`) | That scenario is marked `prescript_failed` (terminal; eval suppressed); others continue |
-| `after` | After specific scenarios only (keyed by `datasetItemId`) | Logged as warning; does not affect scenario status |
-| `afterEach` | After every scenario (after item-specific `after`) | Logged as warning; does not affect scenario status |
-| `afterAll` | Once, after all scenarios complete | Logged as warning; does not affect run status |
+| `after` | After specific scenarios only (keyed by `datasetItemId`) | If the scenario otherwise succeeded → `postscript_failed` (terminal; eval **not** suppressed). If already failed/`prescript_failed`, status is preserved |
+| `afterEach` | After every scenario (after item-specific `after`) | Same as `after` — both always attempt to run; errors are combined when marking `postscript_failed` |
+| `afterAll` | Once, after all scenarios complete | Successfully completed scenarios are marked `postscript_failed`; already-failed/`prescript_failed` items keep their status |
 
 ### Context passing
 
@@ -279,7 +279,7 @@ async function teardownRefundScenario(
   try {
     api.deleteRefundAccount(setupContext?.refundAccountId);
   } catch {
-    // after failures are logged but do not affect scenario status
+    // Catch locally so teardown errors do not mark the item postscript_failed
   }
 }
 (teardownRefundScenario as any).description =
@@ -403,11 +403,17 @@ All hooks are optional. Omit any you don't need.
 ### Netra UI display
 
 When `hooks` are passed, lightweight descriptors are sent to the backend as `lifecycleHooks`:
-- `name` — from `fn.name`
-- `description` — from `fn.description` (truncated to 200 characters)
-- `configured: true`
+- Run-level: `beforeAll`, `beforeEach`, `afterEach`, `afterAll`
+- Item-level: `items[]` with `datasetItemId` + optional `before` / `after`
+- Each descriptor: `name` (from `fn.name`), `description` (from `fn.description`, truncated to 200 characters), `configured: true`
 
-The Netra dashboard shows which hook types are configured on the test run (e.g. "Has pre-script" badge) and can display the description text. The actual script code is never stored by Netra.
+In the Netra dashboard (multi-turn **Scenario Run Details** → **Conversation** tab):
+- Configured pre-hooks appear in a collapsible **Pre-script** panel (labels: `before_all`, `before_each`, `before`)
+- Configured post-hooks appear in a collapsible **Post-script** panel (labels: `after`, `after_each`, `after_all`); hidden while the item is still `running`
+- Each row shows the hook `name` and `description` (or "No description" if both are missing)
+- Item run status badges include **Prescript Failed** and **Postscript Failed**
+
+The actual script code is never stored by Netra.
 
 Always set `.description` on every hook so the UI has useful context.
 
@@ -423,11 +429,12 @@ Always set `.description` on every hook so the UI has useful context.
 6. When using hooks: `beforeAll` returns a plain object or `null`/`undefined` (other types are ignored).
 7. When using hooks: `beforeEach` receives `sharedContext` and returns a plain object or `null`/`undefined`; runs for every item.
 8. When using hooks: `before` dict values receive the merged context from `beforeAll` + `beforeEach` and return a plain object or `null`/`undefined`.
-9. When using hooks: `after` / `afterEach` receive `result` and `setupContext` (merged `beforeAll` + `beforeEach` + item `before`); return value is ignored. They also run when the scenario fails, exceeds max turns, or a before hook fails (with the furthest successfully built `setupContext`).
-10. When using hooks: `afterAll` should not throw — wrap risky cleanup in try/catch. Its `results` include setup/first-turn failures as well as conversation failures.
+9. When using hooks: `after` / `afterEach` receive `result` and `setupContext` (merged `beforeAll` + `beforeEach` + item `before`); return value is ignored. They also run when the scenario fails, exceeds max turns, or a before hook fails (with the furthest successfully built `setupContext`). Wrap teardown in try/catch — a failure on an otherwise-successful item marks it `postscript_failed`.
+10. When using hooks: `afterAll` should not throw — wrap risky cleanup in try/catch. Its `results` include setup/first-turn failures as well as conversation failures. An `afterAll` failure marks successfully completed items `postscript_failed` without overwriting already-failed/`prescript_failed` items.
 11. Hook dict keys must match `datasetItemId` values from your dataset.
 12. When using hooks: every hook function has `(fn as any).description = "..."` set (≤ 200 chars).
 13. A `prescript_failed` scenario is **terminal** — the SDK polling loop will not wait for it. Its `evalStatus` is set to `NOT_AVAILABLE` automatically and it cannot be overwritten by a timeout sweep. If all scenarios end as `failed` or `prescript_failed`, the run's evaluation status resolves to `NOT_AVAILABLE`.
+14. A `postscript_failed` scenario is **terminal** but eval is **not** suppressed (evaluations from a completed conversation remain valid). It cannot be overwritten by a timeout sweep. `postscript_failed` items are excluded from the “all failed → NOT_AVAILABLE” roll-up.
 
 ## References
 
