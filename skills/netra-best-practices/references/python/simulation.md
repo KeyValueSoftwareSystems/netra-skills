@@ -74,6 +74,22 @@ def run(
 
 > `setup_context` is backwards compatible — existing tasks that don't declare this parameter continue to work without modification.
 
+### Root input & output in tasks
+
+`run()` receives the simulated user's `message` and returns the agent's reply — pass **exactly those** to the root input/output utilities. `set_root_input` takes the current turn's user message and nothing else; `set_root_output` takes the reply text the user would see, not the `TaskResult` or your agent's raw response object.
+
+```python
+# ❌ Wrong — turn envelope in, agent response object out
+Netra.set_root_input({"message": message, "session_id": session_id, "files": files})
+Netra.set_root_output(response)
+
+# ✅ Right
+Netra.set_root_input(message)
+Netra.set_root_output(response.text)
+```
+
+Session identity belongs on `Netra.set_session_id()`, not in the root input. File attachments are already carried by the `files` parameter — do not fold them into the root input.
+
 ### TaskResult fields
 
 | Field        | Type  | Description                            |
@@ -373,16 +389,17 @@ Always set `.description` on every hook so the UI has useful context.
 1. `Netra.init()` is called before accessing `Netra.simulation`.
 2. `NETRA_API_KEY` and `NETRA_OTLP_ENDPOINT` are set.
 3. Task's `run()` always returns a `TaskResult` with both `message` and `session_id`.
-4. `Netra.shutdown()` is called on graceful termination.
-5. When using hooks: `before_all` returns a `dict` or `None` (other types are ignored).
-6. When using hooks: `before_each` receives `shared_context` and returns `dict` or `None`; runs for every item.
-7. When using hooks: `before` dict values (functions) receive the merged context from `before_all` + `before_each` and return `dict` or `None`.
-8. When using hooks: `after` / `after_each` receive `result` and `setup_context` (merged `before_all` + `before_each` + item `before`); return value is ignored. They also run when the scenario fails, exceeds max turns, or a before hook fails (with the furthest successfully built `setup_context`). Wrap teardown in try/except — a failure on an otherwise-successful item marks it `postscript_failed`.
-9. When using hooks: `after_all` should not raise — wrap risky cleanup in try/except. Its `results` include setup/first-turn failures as well as conversation failures. An `after_all` failure marks successfully completed items `postscript_failed` without overwriting already-failed/`prescript_failed` items.
-10. Hook dict keys must match `dataset_item_id` values from your dataset.
-11. When using hooks: every hook function has `fn.description = "..."` set (≤ 200 chars).
-12. A `prescript_failed` scenario is **terminal** — the SDK polling loop will not wait for it. Its `evalStatus` is set to `NOT_AVAILABLE` automatically and it cannot be overwritten by a timeout sweep. If all scenarios end as `failed` or `prescript_failed`, the run's evaluation status resolves to `NOT_AVAILABLE`.
-13. A `postscript_failed` scenario is **terminal** but eval is **not** suppressed (evaluations from a completed conversation remain valid). It cannot be overwritten by a timeout sweep. `postscript_failed` items are excluded from the “all failed → NOT_AVAILABLE” roll-up.
+4. Task's `run()` calls `Netra.set_root_input(message)` at the start and `Netra.set_root_output(response)` before returning, passing **only the core input and output** — the current turn's user message and the agent's reply text, never the turn envelope, `session_id`, files, or the `TaskResult`/raw response object.
+5. `Netra.shutdown()` is called on graceful termination.
+6. When using hooks: `before_all` returns a `dict` or `None` (other types are ignored).
+7. When using hooks: `before_each` receives `shared_context` and returns `dict` or `None`; runs for every item.
+8. When using hooks: `before` dict values (functions) receive the merged context from `before_all` + `before_each` and return `dict` or `None`.
+9. When using hooks: `after` / `after_each` receive `result` and `setup_context` (merged `before_all` + `before_each` + item `before`); return value is ignored. They also run when the scenario fails, exceeds max turns, or a before hook fails (with the furthest successfully built `setup_context`). Wrap teardown in try/except — a failure on an otherwise-successful item marks it `postscript_failed`.
+10. When using hooks: `after_all` should not raise — wrap risky cleanup in try/except. Its `results` include setup/first-turn failures as well as conversation failures. An `after_all` failure marks successfully completed items `postscript_failed` without overwriting already-failed/`prescript_failed` items.
+11. Hook dict keys must match `dataset_item_id` values from your dataset.
+12. When using hooks: every hook function has `fn.description = "..."` set (≤ 200 chars).
+13. A `prescript_failed` scenario is **terminal** — the SDK polling loop will not wait for it. Its `evalStatus` is set to `NOT_AVAILABLE` automatically and it cannot be overwritten by a timeout sweep. If all scenarios end as `failed` or `prescript_failed`, the run's evaluation status resolves to `NOT_AVAILABLE`.
+14. A `postscript_failed` scenario is **terminal** but eval is **not** suppressed (evaluations from a completed conversation remain valid). It cannot be overwritten by a timeout sweep. `postscript_failed` items are excluded from the “all failed → NOT_AVAILABLE” roll-up.
 
 ## References
 
