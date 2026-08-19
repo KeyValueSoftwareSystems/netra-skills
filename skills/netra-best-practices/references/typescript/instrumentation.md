@@ -85,12 +85,14 @@ import { workflow, agent, task, span } from "netra-sdk/decorators";
 
 @workflow({ name: "order-fulfillment" })
 class OrderWorkflow {
-  async run(order: { id: string; items: unknown[] }) {
-    Netra.setRootInput(order);
+  async run(order: { id: string; items: unknown[]; customerRequest: string }) {
+    // Root input: only the user's request text, not the whole order envelope.
+    Netra.setRootInput(order.customerRequest);
 
     const result = await new OrderAgent().orchestrate(order);
 
-    Netra.setRootOutput(result);
+    // Root output: only the message returned to the user, not the internal result object.
+    Netra.setRootOutput(result.confirmationMessage);
     return result;
   }
 }
@@ -106,7 +108,11 @@ class OrderAgent {
 
   @span({ name: "shipping-quote", asType: SpanType.TOOL })
   async dispatch(order: { id: string }) {
-    return { status: "queued", orderId: order.id };
+    return {
+      status: "queued",
+      orderId: order.id,
+      confirmationMessage: `Order ${order.id} is queued for shipping.`,
+    };
   }
 
   async orchestrate(order: { id: string; items: unknown[] }) {
@@ -191,14 +197,19 @@ Netra.setCustomAttributes("feature", "chat-v2");
 
 ## Root Input & Output
 
-Use `setRootInput` and `setRootOutput` to record the top-level input and output on the **root span** of the current trace. These values appear as the `input` and `output` attributes on the trace in the Netra dashboard, making it easy to see what went in and what came out at a glance.
+`setRootInput` and `setRootOutput` record the top-level input and output on the **root span** of the current trace. They carry a specific meaning — they are not general-purpose debug attributes:
+
+- **Root input** = the input the *user* (or calling client) gave the AI/agent system — the prompt, question, or message that started this trace.
+- **Root output** = the final answer the AI/agent system sent *back to the user* — the response content as the user sees it.
+
+These become the `input` and `output` attributes on the trace in the Netra dashboard and are what trace-level evaluators read. Everything else — routing metadata, auth context, internal state, token usage — belongs on span attributes or custom attributes, not here.
 
 **Always set root input at the entry point of your workflow and root output before returning the final result.** This should be the default practice for every instrumented application.
 
 ```typescript
 import { Netra } from "netra-sdk";
 
-Netra.setRootInput({ query: "What is the weather today?" });
+Netra.setRootInput("What is the weather today?");
 
 // ... run your pipeline / agent / chain ...
 
@@ -206,6 +217,31 @@ Netra.setRootOutput("The weather today is sunny with a high of 72°F.");
 ```
 
 Both methods accept any serializable value (strings, objects, arrays, etc.). The SDK serializes the value to a string internally.
+
+### Set only the core input and output
+
+Handlers usually receive a request *envelope* and return a response *envelope*. Extract the core content — **do not pass the whole object**. A trace whose input is the entire request body buries the actual user question inside metadata, which makes traces hard to scan and trace-level evaluators unreliable.
+
+```typescript
+// ❌ Wrong — whole envelopes; the real input/output is buried in metadata
+Netra.setRootInput(req.body);    // { message, sessionId, authToken, flags }
+Netra.setRootOutput(response);   // { text, usage, model, latencyMs }
+
+// ✅ Right — only what the user sent and what the user gets back
+Netra.setRootInput(req.body.message);
+Netra.setRootOutput(response.text);
+```
+
+Rules for picking the value:
+
+- Prefer a **plain string** when the user's input is text and the answer is text — the common case.
+- Use an object **only when the core input genuinely has multiple parts** (e.g. `{ question, imageUrl }`), and include only those parts.
+- For multi-turn chat, root input is the **current user turn**, not the whole message history. History belongs on the generation span's prompt.
+- Exclude prompt scaffolding: system prompts, retrieved/RAG context, tool schemas, few-shot examples. These are already captured on the generation spans that use them.
+- Exclude identity and infrastructure fields — `sessionId`, `userId`, `tenantId`, auth tokens, request IDs, feature flags. Use `Netra.setSessionId()`, `setUserId()`, `setTenantId()`, and `setCustomAttributes()` for those.
+- Exclude response bookkeeping: token usage, cost, model name, finish reason, timings, trace IDs.
+- Never pass secrets or raw PII — root input/output is stored and rendered on the trace.
+- If the core value is nested, index into it instead of passing the parent: `payload.data.query`, not `payload`.
 
 ### Generator / SSE streaming (Express, Next.js, Hono, etc.)
 
@@ -272,8 +308,9 @@ Netra.runWithRootSpan(() => {
 3. `experimentalDecorators: true` is set in `tsconfig.json` if using decorators.
 4. Manual spans always call `span.end()` in a `finally` block.
 5. `Netra.setRootInput()` is called at the entry point with the user's input, and `Netra.setRootOutput()` is called with the final result before returning. For SSE/generator streaming, chunks are accumulated and `setRootOutput` is called after iteration completes.
-6. `await Netra.shutdown()` is called on graceful app termination.
-7. All `NetraInstruments` values and `SpanType` values used are verified against the official Netra documentation listed in the **References** section below.
+6. Root input/output carry **only the core input and output** — the user's message in, the user-facing response out. No request/response envelopes, no message history, no system prompts or retrieved context, no session/user/auth fields, no usage or timing metadata.
+7. `await Netra.shutdown()` is called on graceful app termination.
+8. All `NetraInstruments` values and `SpanType` values used are verified against the official Netra documentation listed in the **References** section below.
 
 ## References
 

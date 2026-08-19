@@ -126,6 +126,20 @@ async def my_async_task(input):
 
 Each task invocation is automatically wrapped in a `TestRun.{name}` span, so the call is traced end-to-end without extra instrumentation.
 
+**Root input/output must be the core values only.** `set_root_input` takes the dataset item's input as the system receives it, and `set_root_output` takes the answer the task produces — not the raw SDK response object, and not a result envelope. If the task builds a richer prompt (system prompt, retrieved context, few-shot examples) or returns a structured result, still pass only the user-level input and the user-facing answer:
+
+```python
+# ❌ Wrong — prompt scaffolding in, SDK response envelope out
+Netra.set_root_input({"input": input, "system_prompt": SYSTEM_PROMPT, "context": chunks})
+Netra.set_root_output(response)
+
+# ✅ Right
+Netra.set_root_input(input)
+Netra.set_root_output(response.choices[0].message.content)
+```
+
+This matters more here than anywhere else: evaluators score the trace's `input`/`output`, so extra metadata directly degrades evaluation results.
+
 ## Running a Test Suite
 
 `run_test_suite` is the main entry point. It creates a test run, executes the task for every item, runs local evaluators, submits results, and marks the run as completed.
@@ -325,7 +339,7 @@ Netra.shutdown()
 2. `NETRA_API_KEY` and `NETRA_OTLP_ENDPOINT` environment variables are set.
 3. Every `DatasetItem` has a non-empty `input`.
 4. The `task` function accepts a single argument and returns the output.
-5. The `task` function calls `Netra.set_root_input(input)` at the start and `Netra.set_root_output(output)` before returning.
+5. The `task` function calls `Netra.set_root_input(input)` at the start and `Netra.set_root_output(output)` before returning, passing **only the core input and output** — the dataset item's input and the user-facing answer, never prompt scaffolding, retrieved context, or a raw SDK response/result envelope.
 6. Custom evaluator `evaluate()` returns `EvaluatorOutput` with `evaluator_name` matching `config.name`.
 6. `ScoreType` matches the type of `result` (bool for `BOOLEAN`, number for `NUMERICAL`, string for `CATEGORICAL`).
 7. `Netra.shutdown()` is called on graceful termination.

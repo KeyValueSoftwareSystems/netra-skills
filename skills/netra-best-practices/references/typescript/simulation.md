@@ -79,6 +79,22 @@ abstract run(
 
 > `setupContext` is backwards compatible — existing tasks that don't declare this parameter continue to work without modification.
 
+### Root input & output in tasks
+
+`run()` receives the simulated user's `message` and returns the agent's reply — pass **exactly those** to the root input/output utilities. `setRootInput` takes the current turn's user message and nothing else; `setRootOutput` takes the reply text the user would see, not the `TaskResult` or your agent's raw response object.
+
+```typescript
+// ❌ Wrong — turn envelope in, agent response object out
+Netra.setRootInput({ message, sessionId, files });
+Netra.setRootOutput(response);
+
+// ✅ Right
+Netra.setRootInput(message);
+Netra.setRootOutput(response.text);
+```
+
+Session identity belongs on `Netra.setSessionId()`, not in the root input. File attachments are already carried by the `files` parameter — do not fold them into the root input.
+
 ### TaskResult interface
 
 ```typescript
@@ -424,7 +440,7 @@ Always set `.description` on every hook so the UI has useful context.
 1. `await Netra.init()` is called before accessing `Netra.simulation`.
 2. `NETRA_API_KEY` and `NETRA_OTLP_ENDPOINT` are set.
 3. Task's `run()` always returns a `TaskResult` with both `message` and `sessionId`.
-4. Task's `run()` calls `Netra.setRootInput(message)` at the start and `Netra.setRootOutput(response)` before returning.
+4. Task's `run()` calls `Netra.setRootInput(message)` at the start and `Netra.setRootOutput(response)` before returning, passing **only the core input and output** — the current turn's user message and the agent's reply text, never the turn envelope, `sessionId`, files, or the `TaskResult`/raw response object.
 5. `await Netra.shutdown()` is called on graceful termination.
 6. When using hooks: `beforeAll` returns a plain object or `null`/`undefined` (other types are ignored).
 7. When using hooks: `beforeEach` receives `sharedContext` and returns a plain object or `null`/`undefined`; runs for every item.
